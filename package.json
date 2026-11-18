@@ -1,0 +1,16 @@
+{
+  "name": "stave-and-batten",
+  "version": "1.0.0",
+  "description": "A crate and barrel workshop: procedural geometry, wood cut from a virtual log, baked PBR maps.",
+  "scripts": {
+    "build": "node build.js",
+    "dev": "node build.js --dev",
+    "test": "node test/geometry.mjs"
+  },
+  "license": "CC0-1.0",
+  "devDependencies": {
+    "esbuild": "^0.28.2",
+    "gltf-validator": "^2.0.0-dev.3.10"
+  },
+  "private": true
+}

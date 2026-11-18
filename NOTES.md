@@ -99,6 +99,7 @@ Timings are only real after a one-pixel `readPixels`. `gl.finish()` does not wai
 
 - `npm run build` writes the release page to `docs/index.html` as well as `dist/`. GitHub Pages serves `docs/` from the main branch. `dist/`, `shots/` and `assets_raw/` are not committed.
 - `tools/gen_*.py` need an OpenAI-style image server; set `IMAGE_HOST`.
+- Public at https://github.com/ngutten/stave-and-batten (CC0), served at https://ngutten.github.io/stave-and-batten/. To publish a change: `npm run build`, commit on `main`, push `main`. Only `main` is public; any other local branch stays local.
 
 ## Next
 

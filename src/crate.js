@@ -12,7 +12,7 @@
 import { rng } from './rng.js';
 import { createModel, addBox, addPlank, addSolidBox, FACE, add, sub, mul, madd, cross, norm, dot, len } from './model.js';
 import { logFrame } from './wood.js';
-import { ragged, mirrorBreak, damageField } from './damage.js';
+import { ragged, mirrorBreak, damageField, FIRE_PARAMS, fireField, burnSpans, charredEnd } from './damage.js';
 import { createGround } from './settle.js';
 
 export const CRATE_PARAMS = [
@@ -32,6 +32,7 @@ export const CRATE_PARAMS = [
   { key: 'damage', label: 'Damage', min: 0, max: 1, step: 0.01, def: 0, group: 'Damage', hint: 'Loose, then snapped and stove in, then torn away' },
   { key: 'blows', label: 'Blows', min: 1, max: 4, step: 1, def: 2, group: 'Damage', hint: 'How many places it was hit' },
   { key: 'rubble', label: 'Debris left', min: 0, max: 1, step: 0.01, def: 0.75, group: 'Damage', hint: 'How much of what fell is still lying there' },
+  ...FIRE_PARAMS,
 ];
 
 export function crateDefaults() { const p = {}; for (const d of CRATE_PARAMS) p[d.key] = d.def; return p; }
@@ -63,9 +64,18 @@ export function buildCrate(params, seed) {
     blows.push(add(madd(pn.c, pn.u, Rd.sym(pn.pw * 0.42)), mul(pn.v, Rd.sym(pn.ph * 0.42))));
   }
   const { hurt } = damageField(dmg, blows, diag);
+  const fire = fireField(P.fire, P.seat, seed, { hx: W / 2 + bt, hz: D / 2 + bt, floorY: yb + t });
+  // a crate is open to view once anything is broken or burnt through: look for heat over 1 anywhere on its skin
+  let burnsThrough = false;
+  if (fire.burns) for (let i = 0; i <= 8 && !burnsThrough; i++) for (let j = 0; j <= 8 && !burnsThrough; j++) {
+    const u = i / 8 - 0.5, v = j / 8 - 0.5;
+    for (const p of [[u * W, yb + (v + 0.5) * H, D / 2], [u * W, yb + (v + 0.5) * H, -D / 2], [W / 2, yb + (v + 0.5) * H, u * D], [-W / 2, yb + (v + 0.5) * H, u * D], [u * W, yt, v * D], [u * W, yb, v * D]])
+      if (fire.heat(p) > 0.9) { burnsThrough = true; break; }
+  }
+  const opened = damaged || burnsThrough;
 
   // dark liner just under the skin so gaps read as gaps (an intact crate has no inside)
-  if (!damaged) addSolidBox(m, [0, ym, 0], [W - t * 1.2, H - t * 1.2, D - t * 1.2]);
+  if (!opened) addSolidBox(m, [0, ym, 0], [W - t * 1.2, H - t * 1.2, D - t * 1.2]);
 
   const G = [0, -1, 0];
   let wallsDown = 0;
@@ -115,15 +125,31 @@ export function buildCrate(params, seed) {
       const near = (p) => Math.min(...blows.map((q) => len(sub(p, q))));
       b.keep = near(e0) > near(e1) ? -1 : 1;
       if (b.state === 2 && Math.abs(e0[1] - e1[1]) > 0.02) b.keep = e0[1] > e1[1] ? -1 : 1;      // it hangs from its upper end
+      // fire: a sound batten loses whatever burned through, and keeps the pieces still nailed down (state 5)
+      if (fire.burns && b.state <= 1) {
+        const bs = burnSpans((a) => fire.heat(at(b.cu + b.dirU[0] * a, b.cv + b.dirU[1] * a, bt)), -b.len / 2, b.len / 2, rng(seed, 'battenburn', pn.name, b.name));
+        if (bs.any) {
+          b.pieces = bs.kept.filter(([a0, a1]) => a1 - a0 > 0.05);
+          b.gone2 = bs.gone;
+          b.state = b.pieces.length ? 5 : 4; b.consumed = true;
+          b.brkB = charredEnd(rng(seed, 'battenchar', pn.name, b.name), b.wid, bt);
+        }
+      }
       // a broken batten keeps a stub at the end that held
       if (b.state === 3) {
         b.brk = ragged(Rb, b.wid, bt);
         const keepLen = Math.max(b.brk.max + 0.03, b.len * Rb.range(0.18, 0.5));
         b.a0 = b.keep < 0 ? -b.len / 2 : b.len / 2 - keepLen; b.a1 = b.a0 + keepLen;
       }
+      // does its footprint lie over the point (pu, pv)?
+      b.covers = (pu, pv) => {
+        const a = (pu - b.cu) * b.dirU[0] + (pv - b.cv) * b.dirU[1], w = -(pu - b.cu) * b.dirU[1] + (pv - b.cv) * b.dirU[0];
+        return Math.abs(a) < b.len / 2 && Math.abs(w) < b.wid / 2;
+      };
       // does it still pin down whatever lies under the point (pu, pv)?
       b.holds = (pu, pv) => {
         if (b.state <= 1) return true;
+        if (b.state === 5) { const a = (pu - b.cu) * b.dirU[0] + (pv - b.cv) * b.dirU[1]; return b.pieces.some(([a0, a1]) => a > a0 + 0.01 && a < a1 - 0.01); }
         if (b.state !== 3) return false;
         const a = (pu - b.cu) * b.dirU[0] + (pv - b.cv) * b.dirU[1];
         return a > b.a0 && a < b.a1 - b.brk.max;
@@ -133,7 +159,8 @@ export function buildCrate(params, seed) {
     // members still fast, the whole panel comes down; and a lid with no walls
     // under it has nothing to sit on.
     const frame = battens.filter((b) => b.name !== 'brace' && b.name !== 'mid');
-    let collapsed = damaged && !isBottom && frame.filter((b) => b.state <= 1).length < 2;
+    const fast = (b) => b.state <= 1 || (b.state === 5 && Math.max(...b.pieces.map(([a0, a1]) => a1 - a0)) > b.len * 0.5);
+    let collapsed = opened && !isBottom && frame.filter(fast).length < 2;
     if (pn.name === 'top' && wallsDown >= 3) collapsed = true;
     if (collapsed) { for (const b of battens) { b.state = 4; b.gone = true; b.holds = () => false; } if (pn.wall) wallsDown++; }
     pn.collapsed = collapsed;
@@ -147,6 +174,7 @@ export function buildCrate(params, seed) {
     const dir = alongV ? pn.v : pn.u, acr = alongV ? pn.u : pn.v;
     const holdLo = byName[alongV ? 'railBot' : 'stileL'], holdHi = byName[alongV ? 'railTop' : 'stileR'];
     const boards = [];       // { rect, faces: [island of each outer face that exists] }
+    const standing = [];     // rects of board that is still in place: what a burnt batten can still be nailed to
     let pos = -span / 2;
     for (let i = 0; i < nb; i++) {
       const w = ws[i], cen = pos + w / 2; pos += w;
@@ -165,9 +193,34 @@ export function buildCrate(params, seed) {
       const holders = (heldLo ? 1 : 0) + (heldHi ? 1 : 0);
       const fall = (x0, x1, left, right) => debris.push({ L: x1 - x0, W: Wd, T: t, home: madd(c0, ax0, (x0 + x1) / 2), out: pn.wall ? pn.n : null, along: ax0,
         spec: { seed: sd, log: lf, rest, logShift: [(x0 + x1) / 2, 0, 0], tag: 'board', left, right, stations: left || right ? (left || right).ys : undefined } });
-      if (damaged && holders === 0 && s < 0.22) { fall(-L / 2, L / 2, null, null); continue; }      // nothing left to hold it: it has fallen away
+      if (opened && holders === 0 && s < 0.22) { fall(-L / 2, L / 2, null, null); continue; }      // nothing left to hold it: it has fallen away
+      // burnt through: the stretches that are left stay where something still holds them, the rest falls, charred
+      if (fire.burns && s < 0.22) {
+        const Rbn = rng(seed, 'boardburn', pn.name, i);
+        const bs = burnSpans((x) => fire.heat(madd(c0, ax0, x)), -L / 2, L / 2, Rbn);
+        if (bs.any) {
+          const brkA = charredEnd(Rbn, Wd, t), brkB = charredEnd(Rbn, Wd, t);
+          for (const [k0, k1] of bs.kept) {
+            if (k1 - k0 < 0.05) continue;
+            const left = k0 > -L / 2 + 1e-4 ? brkA : null, right = k1 < L / 2 - 1e-4 ? brkB : null;   // offsets are insets at both ends (model.js addPlank)
+            // held if any batten still standing crosses it here
+            let held = false;
+            for (let x = k0 + 0.01; x < k1 - 0.01 && !held; x += 0.01) {
+              const pu = alongV ? cen : x, pv = alongV ? x : cen;
+              held = battens.some((b) => b.state !== 4 && b.covers(pu, pv) && b.holds(pu, pv));
+            }
+            if (!held) { fall(k0, k1, left, right); continue; }
+            standing.push(alongV ? { u0: rect.u0, u1: rect.u1, v0: k0, v1: k1 } : { u0: k0, u1: k1, v0: rect.v0, v1: rect.v1 });
+            const o = addPlank(m, { c: madd(c, ax, (k0 + k1) / 2), ax, ay, az, L: k1 - k0, W: Wd, T: t, seed: sd, log: lf, rest, logShift: [(k0 + k1) / 2, 0, 0], tag: 'board',
+              left, right, stations: brkA.ys, mask: FACE.ALL, lowMask: FACE.NZ | FACE.PY | FACE.NY });
+            brd.faces.push(o[FACE.PZ]);
+          }
+          continue;
+        }
+      }
       if (s < 0.22 && !(damaged && holders < 2 && s > 0.05)) {
-        const o = addBox(m, { c, ax, ay, az, L, W: Wd, T: t, mask: damaged ? FACE.ALL : FACE.PZ, lowMask: BOARD_IN, bevel, seed: sd, log: lf, rest, tag: 'board' });
+        standing.push(rect);
+        const o = addBox(m, { c, ax, ay, az, L, W: Wd, T: t, mask: opened ? FACE.ALL : FACE.PZ, lowMask: BOARD_IN, bevel, seed: sd, log: lf, rest, tag: 'board' });
         brd.faces.push(o[FACE.PZ]);
         continue;
       }
@@ -209,7 +262,7 @@ export function buildCrate(params, seed) {
       const du = b.dirU, wu = [-du[1], du[0]];
       const d3 = add(mul(pn.u, du[0]), mul(pn.v, du[1])), w3 = add(mul(pn.u, wu[0]), mul(pn.v, wu[1]));
       const shear = b.theta !== undefined ? [Math.tan(b.theta), Math.tan(b.theta)] : undefined;
-      const mask = damaged ? b.mask | FACE.NZ | FACE.PX | FACE.NX : b.mask;
+      const mask = opened ? b.mask | FACE.NZ | FACE.PX | FACE.NX : b.mask;
       const rest = { c: at(b.cu, b.cv, bt / 2), ax: d3, ay: w3, az: pn.n };
 
       // where its nails go: wherever it crosses a board
@@ -288,9 +341,29 @@ export function buildCrate(params, seed) {
         const f0 = b.keep < 0 ? a1 - brk.max : -b.len / 2, f1 = b.keep < 0 ? b.len / 2 : a0 + brk.max;
         debris.push({ L: f1 - f0, W: b.wid, T: bt, home: at(b.cu + du[0] * (f0 + f1) / 2, b.cv + du[1] * (f0 + f1) / 2, bt), out: pn.wall ? pn.n : null, along: d3,
           spec: { seed: b.seed, log: b.lf, rest, logShift: [(f0 + f1) / 2, 0, 0], tag: 'batten', left: b.keep < 0 ? mirrorBreak(brk) : null, right: b.keep < 0 ? null : brk, stations: brk.ys } });
+      } else if (b.state === 5) {
+        // burnt: what is left of it, still nailed where it was, charred at every end the fire made
+        const ax = d3, az = pn.n, ay = cross(az, ax), brk = b.brkB;
+        const onStanding = (pu, pv) => standing.some((r) => pu >= r.u0 && pu <= r.u1 && pv >= r.v0 && pv <= r.v1);
+        for (const [a0, a1] of b.pieces) {
+          const ac = (a0 + a1) / 2, left = a0 > -b.len / 2 + 1e-4 ? brk : null, right = a1 < b.len / 2 - 1e-4 ? brk : null;
+          // it stays if an end is still lapped into the frame, or a nail still finds a board
+          if (left && right && !nails.some((nl) => nl.a > a0 + 0.01 && nl.a < a1 - 0.01 && onStanding(nl.u, nl.v))) {
+            debris.push({ L: a1 - a0, W: b.wid, T: bt, home: at(b.cu + du[0] * ac, b.cv + du[1] * ac, bt), out: pn.wall ? pn.n : null, along: d3,
+              spec: { seed: b.seed, log: b.lf, rest, logShift: [ac, 0, 0], tag: 'batten', left, right, stations: brk.ys } });
+            continue;
+          }
+          const o = addPlank(m, {
+            c: at(b.cu + du[0] * ac, b.cv + du[1] * ac, bt / 2), ax, ay, az, L: a1 - a0, W: b.wid, T: bt, seed: b.seed, log: b.lf, rest, logShift: [ac, 0, 0], tag: 'batten',
+            left, right, stations: brk.ys, mask: FACE.ALL, lowMask: FACE.NZ,
+          });
+          for (const nl of nails) if (nl.a > a0 + 0.01 && nl.a < a1 - brk.max - 0.01) nail(o[FACE.PZ], at(nl.u, nl.v, bt), Rn);
+        }
+        for (const [g0, g1] of b.gone2) leave(g0, g1);
       } else {
         leave(-b.len / 2, b.len / 2);
-        debris.push({ L: b.len, W: b.wid, T: bt, home: at(b.cu, b.cv, bt), out: pn.wall ? pn.n : null, along: d3, spec: { seed: b.seed, log: b.lf, rest, tag: 'batten' } });
+        // what burned is gone; what was knocked off lies below
+        if (!b.consumed) debris.push({ L: b.len, W: b.wid, T: bt, home: at(b.cu, b.cv, bt), out: pn.wall ? pn.n : null, along: d3, spec: { seed: b.seed, log: b.lf, rest, tag: 'batten' } });
       }
     }
   }
@@ -342,7 +415,7 @@ export function buildCrate(params, seed) {
   // photographed from outside (see lod2.js). in / out: how far behind and in
   // front of the face the photograph reaches.
   {
-    const bx = W / 2 + bt, bz = D / 2 + bt, top = yt + bt, out = damaged ? 0.12 : 0.004, cards = [];
+    const bx = W / 2 + bt, bz = D / 2 + bt, top = yt + bt, out = opened ? 0.12 : 0.004, cards = [];
     const faces = {
       front: [[0, 0, 1], [[-bx, 0, bz], [bx, 0, bz], [bx, top, bz], [-bx, top, bz]], D * 0.35],
       back: [[0, 0, -1], [[bx, 0, -bz], [-bx, 0, -bz], [-bx, top, -bz], [bx, top, -bz]], D * 0.35],
@@ -352,9 +425,10 @@ export function buildCrate(params, seed) {
     };
     for (const pn of panels) if (faces[pn.name] && !pn.collapsed) { const [n, pts, inn] = faces[pn.name]; cards.push({ name: pn.name, n, pts, in: inn, out }); }
     // once it can be seen into, the floor and whatever lies on it
-    if (damaged) { const fx = W / 2 - t, fz = D / 2 - t, fy = yb + t; cards.push({ name: 'floor', n: [0, 1, 0], pts: [[-fx, fy, fz], [fx, fy, fz], [fx, fy, -fz], [-fx, fy, -fz]], in: t + 0.01, out: Math.min(0.3, H * 0.4) }); }
+    if (opened) { const fx = W / 2 - t, fz = D / 2 - t, fy = yb + t; cards.push({ name: 'floor', n: [0, 1, 0], pts: [[-fx, fy, fz], [fx, fy, fz], [fx, fy, -fz], [-fx, fy, -fz]], in: t + 0.01, out: Math.min(0.3, H * 0.4) }); }
     m.proxy = { cards };
   }
+  m.fire = fire;
   m.params = P; m.seed = seed;
   return m;
 }

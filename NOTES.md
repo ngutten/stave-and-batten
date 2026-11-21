@@ -66,6 +66,16 @@ Timings are only real after a one-pixel `readPixels`. `gl.finish()` does not wai
 - **A label ages with the crate**: `weather` (age, sun, damp, grime, spills, wet) yellows it (most at its own rim), foxes it, fades its ink in the sun, tears it in pieces rather than specks, and leaves a tide-lined water stain. Paper drinks a spill deeper than wood and holds more grime (`gLabel`). "Worn away" still adds tearing.
 - **Plain face** (Joinery) leaves the brace or mid rail off one wall, so a label can go on clear boards.
 
+## Fire (2026-11-20)
+
+- **The fire is the last thing that happened.** Its block in the material shader runs after all grunge, so char covers patina, grime, moss, paint and labels; nothing has weathered since.
+- **One heat field**, `fireField(...).heat(p)` in `damage.js`, mirrored by `heatAt()` in the bake. Keep the two in step. It is evaluated in **rest space** (`vRest`), so a piece that burned and fell keeps the char it had where it stood. Params: Fire (amount) and Fire was (beside / beneath / inside); the seat is drawn from stream `'fire'`. Model carries `m.fire`; the bake reads it for `uFire` / `uFireSeat`.
+- **What JS knows:** heat over 1 burns through (`burnSpans` along each board and batten, with a smooth per-piece wobble). Burnt-through boards keep their kept stretches where a standing batten still covers them, the rest falls as charred debris. Battens become state 5 (pieces still nailed); a middle piece with both ends burnt stays only if a nail still finds standing board. Burnt ends are `charredEnd` (rounded, thinned toward the hot face), not `ragged`. A fire that burns through **opens** the crate (no liner, all faces, floor card), like damage. Barrel: surface only so far (staves and hoops char and tint, nothing burns through).
+- **What only the shader knows:** faces turned to the flames and arrises take more (`fireH`), a batten's ghost shields the board under it for a while, soot rises past the burn (a wider plume) and settles on undersides.
+- **Wood by heat (shader `H`)**, tuned against Nich's reference photos: toasting follows the grain (latewood lines darken first, earlywood goes orange and shrinks back, arrises first); char takes the latewood ridges first, so its front runs ragged along the grain; char is nearly black (linear ~0.01) with sheen on the crowns; alligator blocks staggered row by row, each block keeps fine grain striations and sits at its own height; thin char near the front flakes in slivers to show the scorched wood; deep char has wider checks and ash on block crowns (mostly on upward faces). Iron: temper colours then black scale.
+- **Styles:** facts `sChar`, `sCharCrack`, `sSoot`, `sScorch`, `sAsh`. Ink fills char solid with the brush (its pen `press` noise shows as blocks on a big fill), cel flat black with pale checks, wash a charcoal glaze.
+- Not done: barrel burn-through (staves short, hoops dropping); ash and charcoal lying on the ground; inner faces of an 'inside' fire are only as hot as the field says; draft-quality checks of LOD2 cards with holes.
+
 ## Styles
 
 - A style is a last stage of the material shader (`uStyle`: 0 real, 1 cel, 2 ink, 3 watercolour). The realistic material is computed first and leaves facts behind in `s*` variables (ring field and its width, knot distance, cracks, seams, grey, wear, damp, dirt, rust, marking coverage and colour); the style redraws from those. Nothing in a style reads the finished realistic colour.
@@ -128,6 +138,7 @@ Story: **the fire is the last thing that happened.** Char covers patina, grime, 
 - **Geometry (crate):** sample heat along each board and batten in its rest frame; the stretch over the threshold is consumed, the rest kept with a charred ragged end; pieces left with nothing holding them fall as charred debris; consumed battens count as gone for the collapse rule. **Barrel:** staves burnt short on the seat side; hoops drop when the staves under them go.
 - **Styles:** new facts `sChar`, `sSoot`, `sAsh`; each style draws char as its darkest mark (cel flat black with crack lines, ink solid black with white cracks, wash a charcoal glaze).
 - **Order:** labels; heat field and surface, then look at it from several seats and amounts; crate geometry; barrel; styles; maybe history presets ("Scorched", "Burnt out").
+- *Outcome:* all but the barrel's geometry and presets done; see "Fire". Nich's mid-course corrections: labels should crease, not just tear; paint should blur in a batten's lee; char was too uniform and too light, and scorch must follow the grain.
 
 ## Next
 

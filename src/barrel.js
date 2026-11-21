@@ -13,7 +13,7 @@
 import { rng } from './rng.js';
 import { createModel, addSurface, addIsland, addPlank, emitMesh, MAT, FACE, add, sub, mul, madd, cross, norm, dot } from './model.js';
 import { logFrame } from './wood.js';
-import { ragged, damageField, rigid, frameMap, compose } from './damage.js';
+import { ragged, damageField, rigid, frameMap, compose, FIRE_PARAMS, fireField } from './damage.js';
 import { createGround } from './settle.js';
 
 export const BARREL_PARAMS = [
@@ -30,6 +30,7 @@ export const BARREL_PARAMS = [
   { key: 'damage', label: 'Damage', min: 0, max: 1, step: 0.01, def: 0, group: 'Damage', hint: 'Hoops slip and fall, staves spring and snap, the head drops in' },
   { key: 'blows', label: 'Blows', min: 1, max: 4, step: 1, def: 2, group: 'Damage', hint: 'How many places it was hit' },
   { key: 'rubble', label: 'Debris left', min: 0, max: 1, step: 0.01, def: 0.75, group: 'Damage', hint: 'How much of what fell is still lying there' },
+  ...FIRE_PARAMS,
 ];
 export function barrelDefaults() { const p = {}; for (const d of BARREL_PARAMS) p[d.key] = d.def; return p; }
 
@@ -40,6 +41,7 @@ export function buildBarrel(params, seed) {
   const m = createModel('barrel');
   const { H, staveT: T, chime, slop } = P;
   const rb = P.bilge / 2, rh = rb * P.head, N = Math.round(P.staves);
+  const fire = fireField(P.fire, P.seat, seed, { round: rb, floorY: chime + 0.03 });
   const rOf = (y) => { const k = (2 * y) / H - 1; return rh + (rb - rh) * (1 - k * k); };
   const drOf = (y) => { const k = (2 * y) / H - 1; return -(rb - rh) * 2 * k * (2 / H); };
   // arc length along the profile
@@ -424,6 +426,7 @@ export function buildBarrel(params, seed) {
     m.proxy = { cards, allLoose: damaged && !standing };
   }
   m.wrap = rb;
+  m.fire = fire;
   m.params = P; m.seed = seed; m.G = G;
   return m;
 }

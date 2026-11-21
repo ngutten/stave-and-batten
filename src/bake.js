@@ -90,6 +90,14 @@ ${STYLE_GLSL}
 // from an atlas, four to a row: row 0 spills, 1 splatters, 2 drips.
 uniform sampler2D uGrunge;
 uniform vec4 uGr, uGr2;      // stains, wet, splashes, moss; rot
+uniform vec4 uFire;          // amount (0 = none), plume radius at the seat, its spread with height, height scale (damage.js fireField)
+uniform vec3 uFireSeat;      // where it burned
+// the same field as damage.js fireField().heat: keep the two in step
+float heatAt(vec3 p, float grow){
+  vec3 d = p - uFireSeat.xyz; float up = max(d.y, 0.0);
+  float R = (uFire.y + up * uFire.z) * grow;
+  return 2.2 * uFire.x * exp(-dot(d.xz, d.xz) / (R * R)) * exp(-up / (uFire.w * grow)) * (d.y < 0.0 ? exp(d.y / 0.04) : 1.0);
+}
 uniform vec3 uStainCol, uSplashCol;
 // Runs down a side: drip shapes hung from the top edge of the object, one per
 // cell along it, each its own length.
@@ -149,12 +157,24 @@ void main(){
   vec3 sp = vec3(vPos.x * 60.0, vPos.y * 1.7, vPos.z * 60.0) + uSeed;
   float streak = (smoothstep(0.55, 0.9, vnoise(sp)) * 0.6 + smoothstep(0.6, 0.95, vnoise(sp * vec3(2.3, 1.4, 2.3) + 9.0)) * 0.4) * sideness;
   float soak = 0.0;      // how readily this surface wicks water (end grain most)
+  // fire, the last thing that happened to it: the heat this face took (faces turned to the flames and
+  // arrises most), and the soot that rose past it
+  float fireH = 0.0, sootK = 0.0;
+  if(uFire.x > 0.0){
+    vec3 Nf = normalize(vNrm);
+    float toward = dot(Nf, normalize(uFireSeat.xyz + vec3(0.0, 0.25, 0.0) - vRest));
+    float H0 = heatAt(vRest, 1.0);
+    fireH = H0 * (0.72 + 0.38 * toward) * (0.75 + 0.5 * n1) + H0 * 0.35 * (1.0 - smoothstep(0.0, 0.008, e));
+    fireH *= 1.0 - 0.5 * ghostIn;                     // a batten that burned away shielded the board under it for a while
+    sootK = smoothstep(0.06, 0.40, heatAt(vRest, 1.9)) * (0.55 + 0.55 * max(-Nf.y, 0.0) + 0.35 * (1.0 - ao)) * smoothstep(-0.02, 0.12, vRest.y - uFireSeat.y);
+  }
   float nailHead = 0.0, nailH = 0.0;
   float lateK = 0.5;
   // facts for the drawn styles
   float sF = 0.0, sFw = 1.0, sKrho = 9.0, sKr = 1.0, sCrack = 0.0, sEnd = 0.0, sGrey = 0.0, sWear = 0.0, sDamp = 0.0, sDirt = 0.0, sRust = 0.0, sMark = 0.0, sSeam = 0.0, sHole = 0.0;
   vec3 sFlat = vec3(0.5), sMarkCol = vec3(0.0), sKnotCol = vec3(0.1);
   float gStain = 0.0, gWet = 0.0, gSplash = 0.0, gMoss = 0.0, gRot = 0.0, gLabel = 0.0;
+  float sChar = 0.0, sSoot = 0.0, sAsh = 0.0, sScorch = 0.0, sCharCrack = 0.0;
 
   if(mat == 0){
     Wood w = woodAt(vLog, vIds.y, texel, uKnots * (1.0 - vExtra.z));
@@ -227,6 +247,8 @@ void main(){
         float mk = smoothstep(0.30, 0.62, cov + 0.10 * (fine - 0.5)) + 0.22 * soft * (1.0 - tx.a) * fine;
         mk = mk * (1.0 - 0.35 * lee) + lee * 0.5 * soft * smoothstep(0.80, 0.92, vnoise(vRest * 1100.0 + float(i)));
         mk *= 0.35 + 0.65 * faceP;
+        mk *= 1.0 - smoothstep(0.45, 0.70, fireH + 0.1 * (fine - 0.5));             // burnt off
+        dc *= 1.0 - 0.6 * smoothstep(0.15, 0.45, fireH);                         // blistered dark
         float gone = A.w * (0.15 + 1.5 * blot * blot + 1.2 * wear + 0.9 * grey + 0.5 * (w.late - 0.3));
         mk *= 1.0 - smoothstep(0.55, 0.95, gone + 0.45 * (fine - 0.5));
         mk *= 1.0 - 0.6 * w.crack;
@@ -244,6 +266,7 @@ void main(){
         // chalk: catches on the ridges, rubs off easily
         float mk = sat(cov * 1.3) * (0.35 + 0.65 * fine) * (0.6 + 0.6 * sat(h * 4000.0 + 0.5));
         mk *= 1.0 - smoothstep(0.35, 0.9, A.w * (0.3 + 1.6 * blot * blot + wear));
+        mk *= 1.0 - smoothstep(0.25, 0.45, fireH);
         col = mix(col, dc, sat(mk * A.z)); rough = mix(rough, 0.95, mk);
         if(mk * A.z > sMark){ sMark = mk * A.z; sMarkCol = dc; }
       } else {
@@ -278,6 +301,11 @@ void main(){
           paper = mix(paper, paper * vec3(0.86, 0.74, 0.56), step(wl, wt) * 0.8);
           paper *= 1.0 - 0.35 * (1.0 - smoothstep(0.0, 0.012, abs(wt - wl)));
         }
+        // paper goes first in a fire: it browns, then burns back to a black curled edge
+        float burnP = smoothstep(0.15, 0.24, fireH + 0.08 * (blot - 0.5) + 0.03 * (fine - 0.5));
+        paper = mix(paper, paper * vec3(0.60, 0.40, 0.20), smoothstep(0.05, 0.17, fireH));
+        paper = mix(paper, vec3(0.02, 0.016, 0.012), sat(burnP * 4.0) * (1.0 - burnP));
+        pa *= 1.0 - burnP;
         // the torn edge shows pale fibres
         float fringe = tear * (1.0 - tear) * 4.0 * smoothstep(0.4, 0.6, cov) * facing;
         if(pa > sMark){ sMark = pa; sMarkCol = paper; }
@@ -430,6 +458,83 @@ void main(){
       float wet = smoothstep(0.3, 0.7, splat(gp + 3.1, 0.5, uGr.y * 0.9, 0.0, 0.0, 21.0, texel).x) * mix(0.55, 1.0, topness) * faceK;
       col *= mix(1.0, 0.50, wet); rough = mix(rough, 0.12, wet * 0.9); h = mix(h, h * 0.4, wet * topness); gWet = wet;
     }
+    if(uFire.x > 0.0){
+      // ---- fire: see NOTES (Fire). It came last, so it covers everything above ----
+      float H = fireH;
+      if(mat == 0){
+        // Toasting follows the grain, it is not a cloud laid over it: the latewood lines darken first and
+        // furthest, the soft earlywood between goes orange-brown and shrinks back, so the rings stand up;
+        // arrises toast before flat faces. (Nich's references, 2026-11-20: a flamed crate, torched boards.)
+        float scorch = smoothstep(0.04, 0.26, H);
+        float tl = sat(lateK * 1.3 + smoothstep(0.10, 0.28, H) * 0.7 - 0.25);
+        col = mix(col, col * mix(vec3(0.78, 0.50, 0.26), vec3(0.16, 0.075, 0.03), tl), scorch);
+        col *= 1.0 - scorch * 0.55 * (1.0 - smoothstep(0.0, 0.006, e));
+        h -= scorch * (1.0 - lateK) * 0.00045 * uRelief;
+        // char takes the latewood ridges first and runs along the grain, so its front is ragged lengthwise
+        float grainN = gnoise(vec3(vFace.x * 6.0, vFace.y * 90.0, vIds.y * 11.0));
+        float charK = smoothstep(0.22, 0.34, H + 0.14 * (lateK - 0.5) + 0.06 * grainN + 0.05 * n2) * (1.0 - nailHead);
+        float deep = smoothstep(0.42, 0.95, H + 0.2 * n2);
+        // alligatored: checked across the grain and split along it, in staggered blocks that grow as it burns deeper
+        vec2 fa = vFace.xy + 0.005 * vec2(gnoise(vec3(vFace.xy * 30.0, vIds.y * 17.0)), gnoise(vec3(vFace.xy * 30.0, vIds.y * 17.0 + 5.0)));
+        float sb = mix(0.006, 0.013, deep), sa = mix(0.010, 0.028, deep);
+        // the splits along the grain wander; the checks across it are staggered row by row and lean a little
+        float ry = fa.y / sb + 0.35 * gnoise(vec3(fa.x * 45.0, vIds.y * 3.0, 1.0));
+        float row = floor(ry), rf = fract(ry);
+        float sRow = sa * (0.7 + 0.6 * hash2(row + 7.0, vIds.y * 53.0));
+        float ax = fa.x / sRow + hash2(row, vIds.y * 131.0) + 0.25 * gnoise(vec3(fa.y * 120.0, row, vIds.y * 5.0));
+        float cellA = floor(ax), af = fract(ax);
+        // not every split runs the whole length: some blocks are two rows deep
+        float splitHere = step(0.22, hash2(row * 5.0 + cellA, vIds.y * 41.0 + 2.0));
+        float dRow = mix(1.0, min(rf, 1.0 - rf), splitHere) * sb;
+        float dCrack = min(dRow, min(af, 1.0 - af) * sRow);
+        float cw = mix(0.0004, 0.0013, deep);
+        float crack = (1.0 - smoothstep(cw * 0.4, cw * 1.2 + texel * 0.6, dCrack)) * (1.0 - smoothstep(0.6, 1.4, texel / cw));
+        float pillow = smoothstep(0.0, min(sb, sRow) * 0.28, dCrack);                       // crowns nearly flat, rounded only at the check
+        float fiss = gnoise(vec3(fa * 380.0, vIds.y * 3.0));
+        // each block keeps the grain as fine striations, and sits a little higher or lower, a little tilted
+        float stri = gnoise(vec3(fa.x * 30.0, fa.y * 1100.0, vIds.y * 9.0)) * (1.0 - smoothstep(0.5, 1.2, texel * 1100.0));
+        float blockH = hash2(row * 3.1 + cellA, vIds.y * 19.0 + 4.0);
+        // char is nearly black; what light it has is sheen on the crowns
+        vec3 charCol = vec3(0.0105, 0.0098, 0.0102) * (0.75 + 0.5 * vnoise(vec3(fa * 700.0, vIds.y))) * (0.8 + 0.45 * blockH) * (1.0 + 0.3 * stri);
+        // where the char is still thin it has flaked here and there, showing the scorched wood under it
+        // (only near the char's front, in long slivers between the latewood lines)
+        float flake = (1.0 - smoothstep(0.30, 0.50, H)) * smoothstep(0.68, 0.80, vnoise(vec3(fa.x * 9.0, fa.y * 110.0, vIds.y * 3.0)) + 0.25 * (0.5 - lateK));
+        charCol = mix(charCol, vec3(0.095, 0.034, 0.010) * (0.6 + 0.6 * (1.0 - lateK)), flake);
+        col = mix(col, charCol, charK);
+        col = mix(col, vec3(0.08, 0.030, 0.010), charK * crack * (1.0 - deep) * 0.5);     // pyrolysed brown in a fresh check
+        col *= 1.0 - 0.85 * charK * crack * deep;
+        rough = mix(rough, mix(0.78, 0.50, pillow) + 0.08 * fiss, charK); rough = mix(rough, 0.97, charK * crack);   // a faint silver sheen on the crowns
+        h += charK * (-0.0003 - 0.0015 * deep + pillow * (0.0004 + 0.0007 * deep) + 0.00012 * fiss + 0.00016 * stri
+                      + (blockH - 0.5) * (0.0003 + 0.0006 * deep) - 0.0003 * flake - crack * (0.0010 + 0.0020 * deep));
+        cav *= 1.0 - 0.6 * charK * crack;
+        // edges and ends burn away first
+        float eat = deep * (1.0 - smoothstep(0.0, 0.004 + 0.010 * deep, e));
+        h -= eat * 0.004; col *= 1.0 - 0.3 * eat;
+        // ash lies on what faces up, and in pale patches where it burned hottest
+        float topF = smoothstep(0.4, 0.9, normalize(vNrm).y);
+        // (a block at a time, on its crown: grey-white where the char itself has burned)
+        float ashK = smoothstep(0.85, 1.5, H + 0.25 * n2) * (0.25 + 0.75 * topF);
+        float ash = ashK * step(1.0 - ashK, hash2(row * 3.1 + cellA, vIds.y * 7.0 + 1.0)) * smoothstep(0.2, 0.8, pillow) * (1.0 - nailHead);
+        col = mix(col, vec3(0.30, 0.29, 0.28) * (0.8 + 0.35 * n3), ash * 0.7); rough = mix(rough, 1.0, ash); h += ash * 0.0002;
+        metal *= 1.0 - charK; sChar = charK; sAsh = ash; sScorch = scorch * (1.0 - charK); sCharCrack = charK * crack;
+      } else {
+        // iron: temper colours as it heats (straw, bronze, purple, blue, grey), then black scale
+        float t = sat((H - 0.10) / 0.75);
+        vec3 tc = t < 0.2 ? mix(vec3(1.0), vec3(1.25, 1.05, 0.55), t / 0.2)
+                : t < 0.4 ? mix(vec3(1.25, 1.05, 0.55), vec3(0.95, 0.55, 0.30), (t - 0.2) / 0.2)
+                : t < 0.55 ? mix(vec3(0.95, 0.55, 0.30), vec3(0.75, 0.35, 0.75), (t - 0.4) / 0.15)
+                : t < 0.7 ? mix(vec3(0.75, 0.35, 0.75), vec3(0.35, 0.50, 1.10), (t - 0.55) / 0.15)
+                : mix(vec3(0.35, 0.50, 1.10), vec3(0.9), (t - 0.7) / 0.3);
+        tc = mix(vec3(luma(tc)), tc, 0.6);                                         // seen through scale and grime, not polished steel
+        col *= mix(vec3(1.0), tc, 1.0 - sRust * 0.8);
+        float scale = smoothstep(0.85, 1.10, H + 0.1 * n2);
+        col = mix(col, vec3(0.045, 0.040, 0.038) * (0.8 + 0.4 * n3), scale); rough = mix(rough, 0.85, scale); metal *= 1.0 - 0.7 * scale;
+        h += scale * 0.0003 * (n3 - 0.3); sChar = scale;
+      }
+      // soot: risen past the burn, thickest on undersides and in corners, on iron too
+      float soot = sootK * (1.0 - smoothstep(0.20, 0.36, H));
+      col = mix(col, vec3(0.030, 0.027, 0.025), soot * 0.88); rough = mix(rough, 0.92, soot); metal *= 1.0 - 0.8 * soot; sSoot = soot;
+    }
     // what the drawn styles need to know of all that
     sDirt = max(sDirt, max(gStain * 0.7, gRot)); sDamp = max(sDamp, gWet * 0.8);
     if(gSplash > sMark){ sMark = gSplash; sMarkCol = uSplashCol; }
@@ -486,10 +591,16 @@ void main(){
       base = mix(base, vec3(0.15, 0.29, 0.08), smoothstep(0.40, 0.50, gMoss) * 0.9);
       base = mix(base, base * vec3(0.55, 0.64, 0.50), smoothstep(0.45, 0.55, sDamp) * 0.6);
       base = mix(base, base * 0.62, smoothstep(0.50, 0.60, sDirt) * 0.7);
+      // fire: a toasted brown, a flat black char, soot as a second darker tone
+      base = mix(base, base * vec3(0.62, 0.42, 0.26), smoothstep(0.35, 0.45, sScorch));
+      base = mix(base, base * 0.45, smoothstep(0.40, 0.55, sSoot));
+      base = mix(base, vec3(0.055, 0.050, 0.055), smoothstep(0.45, 0.55, sChar));
+      base = mix(base, vec3(0.30, 0.29, 0.28), smoothstep(0.45, 0.55, sAsh) * 0.8);
       vec3 shadowTint = vec3(0.60, 0.56, 0.72);
       base = mix(base, base * shadowTint, smoothstep(0.52, 0.46, ao * cav + 0.04 * wob) * 0.8);
       base = mix(base, base * shadowTint, baked * smoothstep(0.50, 0.46, light + 0.03 * wobLow) * 0.75);
       col = mix(base, uInkCol, max(outline, cuts));
+      col = mix(col, base * 2.2 + 0.05, smoothstep(0.3, 0.6, sCharCrack) * 0.5);       // char checks drawn as pale lines in the black
       h *= 0.2; rough = mat == 0 ? 0.85 : 0.55; metal = 0.0;
     } else if(uStyle == 2){
       // pen and ink on parchment: line for form, hatching for shadow, stipple for dirt
@@ -501,11 +612,14 @@ void main(){
       float hatch = styleHatch(pp, tone, lw, mix(0.016, 0.006, hatchK), texel) * step(0.01, hatchK);
       // stipple where it is dirty or stained
       vec2 wv = worley(pp / 0.0045 + uSeed);
-      float dots = (1.0 - smoothstep(0.16, 0.30, wv.x)) * step(wv.y, 0.9 * max(max(sDirt * 0.8, sRust), gMoss * 0.9) - 0.12);
+      float dots = (1.0 - smoothstep(0.16, 0.30, wv.x)) * step(wv.y, 0.9 * max(max(max(sDirt * 0.8, sRust), gMoss * 0.9), max(sSoot, sScorch * 0.7)) - 0.12);
       float ink = max(max(outline, grain * 0.85), max(max(kline, kin * 0.8), cuts));
       ink = max(max(ink, hatch), max(max(dots, nailRing), smoothstep(0.15, 0.35, sMark)));
       float press = 0.72 + 0.28 * vnoise(vec3(pp * 70.0, 2.0));                          // the pen floods and runs dry
       col = mix(paper, uInkCol, sat(ink * press * 1.08));
+      // char is filled in solid with the brush (the pen's flooding would show as blocks), its checks left as paper
+      float charFill = smoothstep(0.45, 0.55, sChar) * (1.0 - smoothstep(0.3, 0.6, sCharCrack));
+      col = mix(col, uInkCol, charFill * (0.94 + 0.06 * tooth)); ink = max(ink, charFill);
       h = (tooth - 0.5) * 0.00008 - ink * 0.00002; rough = 0.90; metal = 0.0;
     } else {
       // watercolour: transparent washes over white paper. Light is bare paper,
@@ -527,6 +641,8 @@ void main(){
       pig = mix(pig, vec3(0.16, 0.30, 0.08), gMoss * 0.85);
       pig = mix(pig, pig * vec3(0.50, 0.64, 0.46), sDamp * 0.6);
       pig = mix(pig, pig * 0.55, sDirt * 0.6);
+      pig = mix(pig, pig * vec3(0.60, 0.42, 0.28), sScorch * 0.8);
+      pig = mix(pig, vec3(0.10, 0.10, 0.11), max(sSoot * 0.6, sChar * 0.95));                  // a charcoal glaze
       pig = max(mix(vec3(luma(pig)), pig, 1.15), 0.0);                                   // a little cleaner than the thing it paints
       float amt = 0.58;
       amt += 0.35 * (1.0 - sat(ao * cav));                                               // pigment settles into corners
@@ -884,6 +1000,8 @@ export function createBaker(gl) {
       uGrunge: opts.grunge || blank, uGr: [look.stains || 0, look.wet || 0, look.splash || 0, look.moss || 0], uGr2: [look.rot || 0, 0, 0, 0],
       uStainCol: lin(hex(look.stainCol || '#5a3a22')), uSplashCol: lin(hex(look.splashCol || '#c9c2ae')),
       uWrap: model.wrap ? [1, model.wrap, 0, 0] : [0, 1, 0, 0],
+      uFire: model.fire && model.fire.burns ? [model.fire.amount, model.fire.r0, model.fire.spread, model.fire.Lh] : [0, 1, 1, 1],
+      uFireSeat: model.fire ? model.fire.seat : [0, 0, 0],
     });
     gl.bindVertexArray(bakeVao.v); gl.drawElements(gl.TRIANGLES, bakeVao.count, gl.UNSIGNED_INT, 0);
 

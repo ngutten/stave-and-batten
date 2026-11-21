@@ -22,6 +22,21 @@ export function ragged(R, W, T, { kMin = 4, kMax = 7, reach = 1 } = {}) {
   o.max = Math.max(...o.top, ...o.bot);
   return o;
 }
+// An end the fire made: not torn but eaten back, rounded at the corners where
+// it burned from two sides, and thinned toward the face that took the heat
+// (top, the outer face, recedes further than bot). Same shape as ragged().
+export function charredEnd(R, W, T, { K = 5 } = {}) {
+  const amp = W * R.range(0.06, 0.2), top = [], bot = [], ys = [];
+  for (let k = 0; k <= K; k++) {
+    const y = -W / 2 + (W * k) / K, q = (2 * y) / W;
+    const o = amp * q * q * q * q * (0.6 + 0.4 * R()) + R.range(0, W * 0.12);   // rounded where the corners went first, uneven across
+    top.push(o + T * R.range(0.8, 2.2)); bot.push(o); ys.push(y);
+  }
+  const mn = Math.min(...top, ...bot);
+  const out = { top: top.map((x) => x - mn), bot: bot.map((x) => x - mn), ys };
+  out.max = Math.max(...out.top, ...out.bot);
+  return out;
+}
 // the other side of the same break
 export const mirrorBreak = (o) => ({ top: o.top.map((x) => o.max - x), bot: o.bot.map((x) => o.max - x), ys: o.ys, max: o.max });
 
@@ -33,6 +48,64 @@ export function damageField(dmg, blows, diag) {
   const dist = (p) => len(sub(p, near(p)));
   const hurt = (p, tough) => (damaged ? dmg * 1.35 - (dist(p) / diag) * 0.9 - tough * 0.35 : -1);
   return { damaged, hurt, near, dist, blows };
+}
+
+// Fire. One heat field over rest space, mirrored in the bake (bake.js heatAt): a
+// plume over the seat of the fire whose radius grows with height (the V a fire
+// leaves on a wall) and whose heat falls off upward. heat > 1 burns through.
+// The seat comes from its own stream so blows never move it.
+//   kind 'beside': a fire on the ground against one side; 'beneath': under it;
+//   'inside': its contents burned. box: { hx, hz, floorY, round } (round: a barrel's radius).
+export const FIRE_PARAMS = [
+  { key: 'fire', label: 'Fire', min: 0, max: 1, step: 0.01, def: 0, group: 'Damage', hint: 'Scorched, then charred, then burnt through' },
+  { key: 'seat', label: 'Fire was', options: ['beside', 'beneath', 'inside'], def: 'beside', group: 'Damage', hint: 'Where it burned: against one side, underneath, or inside it' },
+];
+export function fireField(amount, kind, seed, box) {
+  const f = Math.max(0, Math.min(1, amount || 0));
+  const R = rng(seed, 'fire');
+  let seat, r0, spread, Lh;
+  if (kind === 'inside') {
+    const k = box.round ? box.round * 0.3 : 0;
+    seat = box.round ? [R.sym(k), box.floorY, R.sym(k)] : [R.sym(box.hx * 0.35), box.floorY, R.sym(box.hz * 0.35)];
+    r0 = 0.25 + 0.30 * f; spread = 0.30; Lh = 0.45 + 1.4 * f;
+  } else if (kind === 'beneath') {
+    seat = [R.sym((box.round || box.hx) * 0.3), 0, R.sym((box.round || box.hz) * 0.3)];
+    r0 = 0.22 + 0.30 * f; spread = 0.35; Lh = 0.30 + 1.2 * f;
+  } else {
+    const out = R.range(0.10, 0.28);
+    if (box.round) { const a = R.range(0, Math.PI * 2), r = box.round + out; seat = [Math.cos(a) * r, 0, Math.sin(a) * r]; }
+    else {
+      const wall = R.int(0, 3), along = R.sym(0.4);
+      seat = wall === 0 ? [along * box.hx * 2, 0, box.hz + out] : wall === 1 ? [along * box.hx * 2, 0, -box.hz - out]
+        : wall === 2 ? [box.hx + out, 0, along * box.hz * 2] : [-box.hx - out, 0, along * box.hz * 2];
+    }
+    r0 = 0.10 + 0.22 * f; spread = 0.45; Lh = 0.35 + 1.4 * f;
+  }
+  // grow: 1 for the burn, larger for the soot that rises past it
+  const heat = (p, grow = 1) => {
+    if (f <= 0) return 0;
+    const dx = p[0] - seat[0], dy = p[1] - seat[1], dz = p[2] - seat[2], up = Math.max(dy, 0);
+    const Rr = (r0 + up * spread) * grow;
+    return 2.2 * f * Math.exp(-(dx * dx + dz * dz) / (Rr * Rr)) * Math.exp(-up / (Lh * grow)) * (dy < 0 ? Math.exp(dy / 0.04) : 1);
+  };
+  return { amount: f, kind, seat, r0, spread, Lh, heat, burns: f > 0 };
+}
+
+// Along a piece from a0 to a1, which stretches the fire consumed (heat over 1)
+// and which are left. heatAt(a) is the field at a point; the burn front
+// wanders a little (a smooth wobble from R, so the same seed burns the same way).
+export function burnSpans(heatAt, a0, a1, R, step = 0.012) {
+  const p1 = R.range(0, 6.28), p2 = R.range(0, 6.28), k = R.range(0.9, 1.1);
+  const burnt = (a) => heatAt(a) * k * (1 + 0.12 * Math.sin(a * 23 + p1) + 0.07 * Math.sin(a * 61 + p2)) > 1;
+  const n = Math.max(2, Math.ceil((a1 - a0) / step)), kept = [], gone = [];
+  let start = a0, state = burnt(a0), prev = a0;
+  for (let i = 1; i <= n; i++) {
+    const a = a0 + ((a1 - a0) * i) / n, g = burnt(a);
+    if (g !== state) { const cut = (prev + a) / 2; (state ? gone : kept).push([start, cut]); start = cut; state = g; }
+    prev = a;
+  }
+  (state ? gone : kept).push([start, a1]);
+  return { kept, gone, any: gone.length > 0 };
 }
 
 // A rigid motion: rotate by angle about the unit axis through pivot, then translate.

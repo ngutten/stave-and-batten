@@ -147,6 +147,10 @@ Story: **the fire is the last thing that happened.** Char covers patina, grime, 
 - **Order:** labels; heat field and surface, then look at it from several seats and amounts; crate geometry; barrel; styles; maybe history presets ("Scorched", "Burnt out").
 - *Outcome:* the plan's surface work held; its geometry did not. Burning boards and battens through (as planned) left floating pieces and read as impact damage, so fire now only chars and eats board edges, and breaks stay the damage dial's; see "Fire". No presets. Nich's corrections along the way: char was too uniform and too light, and scorch must follow the grain (his reference photos); labels over battens must be stretched paper, not a decal that follows the step (now geometry, `sheet.js`); paint should blur in a batten's lee; stencil labels printed white on black (a bug).
 
+## Published
+
+- 2026-11-21: labels (ageing, printed stencils, paper sheets over battens), Plain face, paint lee, fire (`0f61f52`). Pushed `main` only.
+
 ## Next
 
 Agreed with Nich on 2026-11-18 as later extensions, not started:

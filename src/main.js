@@ -10,6 +10,7 @@ import { NOISE } from './shaders/noise.js';
 import { STYLE_GLSL } from './shaders/style.js';
 import { section, controls, button, el } from './ui.js';
 import { createMarks, hexToRgb } from './marks.js';
+import { addLabelSheet } from './sheet.js';
 import { buildGLB, encodePNG, download } from './gltf.js';
 import { geoArrays } from './model.js';
 import { createImpostor, planCards } from './lod2.js';
@@ -86,18 +87,25 @@ try {
     const mk = MAKES[app.make];
     const fast = app.fullMs < 140;            // a GPU this quick does not need drafts
     if (fast) draft = false;
+    // labels pasted over battens are sheets of their own (sheet.js): geometry, so a change to one rebuilds it
+    const sheetSpec = () => app.marks[app.make].map((m, i) => { const t = m.mode === 'label' && m.over && app.markLib.get(m, app.make + i);
+      return t ? { target: m.target, x: m.x, y: m.y, size: m.size, rot: m.rot, wear: m.wear, aspect: t.aspect } : null; });
+    const sheetKey = JSON.stringify(sheetSpec());
+    if (sheetKey !== app.sheetKey) what = 'all';
     if (what === 'all' || !app.model) {
       app.model = mk.build(app.params[app.make], app.seed);
+      app.sheetKey = sheetKey;
+      sheetSpec().forEach((sp, i) => { if (sp && addLabelSheet(app.model, sp, i, app.seed)) app.model.sheets = (app.model.sheets || 0) | (1 << i); });
       packAtlas(app.model, app.size);
       app.view.setModel(app.model);
-      app.geoKey = JSON.stringify([app.make, app.params[app.make], app.seed, app.size]);
+      app.geoKey = JSON.stringify([app.make, app.params[app.make], app.seed, app.size, sheetKey]);
       if (app.drawMarks && app.shownMake !== app.make) { app.shownMake = app.make; app.drawMarks(); }      // the places a marking can go belong to the model
     }
     const marks = app.marks[app.make].map((mk, i) => {
       const t = app.markLib.get(mk, app.make + i);
       // a label from a stencil or typed text is printed (the shader lays ink on paper); a loaded picture is the label itself
       const printed = mk.mode === 'label' && mk.src !== 'user';
-      return t && { ...mk, tex: mk.mode === 'label' && !printed ? t.texLabel : t.tex, printed, aspect: t.aspect, color: hexToRgb(mk.color) };
+      return t && { ...mk, tex: mk.mode === 'label' && !printed ? t.texLabel : t.tex, printed, sheet: !!((app.model.sheets || 0) & (1 << i)), aspect: t.aspect, color: hexToRgb(mk.color) };
     });
     const r = app.baker.bake(app.model, app.look, { geoKey: app.geoKey, profile: app.profile, scale: draft ? app.draftScale : 1, occDirs: draft ? 32 : 96, marks, style: styleNow(), grunge: app.grunge });
     app.last = r;

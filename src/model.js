@@ -20,7 +20,7 @@ export const norm = (a) => { const l = len(a) || 1; return [a[0] / l, a[1] / l, 
 export const lerp3 = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
 
 // Materials. The bake shader branches on these.
-export const MAT = { WOOD: 0, IRON: 1, DARK: 2, PAINTED_METAL: 3, ROPE: 4 };
+export const MAT = { WOOD: 0, IRON: 1, DARK: 2, PAINTED_METAL: 3, ROPE: 4, PAPER: 5 };
 
 export const NLOD = 2;
 

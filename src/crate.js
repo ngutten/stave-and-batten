@@ -12,7 +12,7 @@
 import { rng } from './rng.js';
 import { createModel, addBox, addPlank, addSolidBox, FACE, add, sub, mul, madd, cross, norm, dot, len } from './model.js';
 import { logFrame } from './wood.js';
-import { ragged, mirrorBreak, damageField, FIRE_PARAMS, fireField, eatenEdges } from './damage.js';
+import { ragged, mirrorBreak, damageField, FIRE_PARAMS, fireField, eatenEdges, EAT_FROM } from './damage.js';
 import { createGround } from './settle.js';
 
 export const CRATE_PARAMS = [
@@ -66,7 +66,15 @@ export function buildCrate(params, seed) {
   const { hurt } = damageField(dmg, blows, diag);
   const fire = fireField(P.fire, P.seat, seed, { hx: W / 2 + bt, hz: D / 2 + bt, floorY: yb + t });
   // Fire chars and eats a crate but does not break it (Nich, 2026-11-20): breaks are the damage dial's.
-  const opened = damaged;
+  // Once it has eaten board edges enough to open gaps, the inside shows, so the crate is built open, as
+  // damage builds it: no liner, inner faces, the floor card.
+  let eatenOpen = false;
+  if (fire.burns) for (let i = 0; i <= 10 && !eatenOpen; i++) for (let j = 0; j <= 10 && !eatenOpen; j++) {
+    const u = i / 10 - 0.5, v = j / 10;
+    for (const p of [[u * W, yb + v * H, D / 2], [u * W, yb + v * H, -D / 2], [W / 2, yb + v * H, u * D], [-W / 2, yb + v * H, u * D], [u * W, yt, (v - 0.5) * D]])
+      if (fire.heat(p) > EAT_FROM + 0.15) { eatenOpen = true; break; }
+  }
+  const opened = damaged || eatenOpen;
 
   // dark liner just under the skin so gaps read as gaps (an intact crate has no inside)
   if (!opened) addSolidBox(m, [0, ym, 0], [W - t * 1.2, H - t * 1.2, D - t * 1.2]);

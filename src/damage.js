@@ -95,6 +95,7 @@ export function fireField(amount, kind, seed, box) {
 // hottest (Nich: fire does not break a crate; damage does). edgeAt(x, side) is a point on
 // the -1 / +1 edge at x along the length. Returns { xs, l, r } for addPlank's o.edges, or
 // null if nothing is eaten. Irregular: each edge wanders on its own.
+export const EAT_FROM = 0.7;      // heat at which board edges start to be eaten (and a crate opens to view)
 export function eatenEdges(fire, edgeAt, L, W, R, step = 0.01) {
   if (!fire.burns) return null;
   const n = Math.max(2, Math.ceil(L / step) + 1), xs = [], l = [], r = [];
@@ -107,8 +108,8 @@ export function eatenEdges(fire, edgeAt, L, W, R, step = 0.01) {
     nl = nl > 0 ? nl - 1 : R.chance(0.05) ? R.int(2, 5) : 0; nr = nr > 0 ? nr - 1 : R.chance(0.05) ? R.int(2, 5) : 0;
     const eat = (side, a, b, j, notch) => {
       const h = fire.heat(edgeAt(x, side));
-      const k = Math.max(0, Math.min(1, (h - 0.55) / 0.9));
-      return W * 0.42 * k * k * (3 - 2 * k) * (0.6 + 0.08 * Math.sin(x * 13 + a) + 0.05 * Math.sin(x * 41 + b) + 0.3 * j + (notch ? 0.35 : 0));
+      const k = Math.max(0, Math.min(1, (h - EAT_FROM) / 1.0));
+      return W * 0.22 * k * k * (3 - 2 * k) * (0.6 + 0.08 * Math.sin(x * 13 + a) + 0.05 * Math.sin(x * 41 + b) + 0.25 * j + (notch ? 0.3 : 0));
     };
     const a = Math.max(0, eat(-1, ph[0], ph[1], jl, nl)), b = Math.max(0, eat(1, ph[2], ph[3], jr, nr));
     const sc = Math.min(1, (W - 0.012) / Math.max(a + b, 1e-9));                    // always leave a sliver

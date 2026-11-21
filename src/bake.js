@@ -138,6 +138,37 @@ vec2 splat(vec2 p, float cell, float density, float row, float upright, float ke
   return best;
 }
 
+// A paper label's colour: the picture as it is, or a stencil or typed text printed in the mark's colour on
+// a cream ground with a margin; aged with the crate (ink fades in the sun, the paper yellows most at its rim,
+// brown spots with age and damp, a tide-lined water stain), and browned then charred by fire.
+// rim: how near its own edge; labK: its coverage as a printed sheet (1 inside, 0 off the paper).
+vec3 labelPaper(int i, vec4 tx, vec3 uvl, float soft, float weather, float age, float sun, float dampK, float fireH, float blot, float fine, out float rim, out float labK){
+  bool printed = uDkP[i].w > 0.5;
+  float edgeUV = min(min(uvl.x, 1.0 - uvl.x), min(uvl.y, 1.0 - uvl.y));
+  rim = printed ? 1.0 - smoothstep(0.0, 0.07, edgeUV) : sat((1.0 - soft) * 2.5);
+  labK = smoothstep(0.0, 0.004, edgeUV);
+  vec3 ink = srgb2lin(tx.rgb);
+  if(printed){
+    vec2 gu = (uvl.xy - 0.5) * 1.22 + 0.5;
+    float glyph = (gu.x > 0.0 && gu.x < 1.0 && gu.y > 0.0 && gu.y < 1.0) ? decalTex(i, gu, uvl.z).a : 0.0;
+    ink = mix(vec3(0.83, 0.79, 0.68), uDkC[i].rgb, smoothstep(0.35, 0.65, glyph));
+  }
+  ink = mix(ink, mix(vec3(luma(ink)), ink, 0.6) * 0.5 + 0.5 * max(ink, vec3(luma(ink))), sat(0.7 * sun + 0.2 * age));
+  vec3 paper = ink * mix(vec3(1.0), vec3(0.80, 0.68, 0.48), sat(0.15 + 0.75 * weather * (0.6 + 0.5 * blot) + 0.5 * rim * weather)) * (0.92 + 0.16 * blot);
+  float fox = smoothstep(0.80, 0.86, vnoise(vRest * 160.0 + 17.0 * float(i))) * sat(age * 1.4 + dampK) * (0.5 + 0.5 * fine);
+  paper = mix(paper, paper * vec3(0.62, 0.45, 0.28), fox * 0.8);
+  float ws = sat((0.8 * uGr.x + 0.7 * uGr.y + 0.6 * dampK) * 1.3);
+  if(ws > 0.02){
+    float wt = 0.5 + 0.5 * fbm2(vRest * 6.5 + 11.0 * float(i)), wl = 1.0 - 0.6 * ws;
+    paper = mix(paper, paper * vec3(0.86, 0.74, 0.56), step(wl, wt) * 0.8);
+    paper *= 1.0 - 0.35 * (1.0 - smoothstep(0.0, 0.012, abs(wt - wl)));
+  }
+  float burnP = smoothstep(0.15, 0.24, fireH + 0.08 * (blot - 0.5) + 0.03 * (fine - 0.5));
+  paper = mix(paper, paper * vec3(0.60, 0.40, 0.20), smoothstep(0.05, 0.17, fireH));
+  paper = mix(paper, vec3(0.02, 0.016, 0.012), sat(burnP * 4.0));
+  return paper;
+}
+
 void main(){
   ivec2 px = ivec2(gl_FragCoord.xy);
   vec4 st = texelFetch(uStamps, px, 0);
@@ -231,6 +262,7 @@ void main(){
       vec4 tx; float soft; vec3 uvl;
       if(!decalAt(i, vRest, texel, tx, soft, uvl)) continue;
       vec4 A = uDkA[i]; vec3 dc = uDkC[i].rgb; int mode = int(A.y + 0.5);
+      if(mode == 4) continue;                       // a label sheet: drawn on its own island (mat 5), the wood under it stays bare
       float nearB = (st.a > 1e-4 && st.a < 0.02) ? (1.0 - st.a / FOOT_A) * 0.03 : 1.0;   // metres to the nearest batten's edge
       float fine = vnoise(vRest * 700.0), blot = 0.5 + 0.5 * fbm2(vRest * 30.0 + 5.0 * float(i));
       float cov = tx.a * (1.0 - 0.9 * ghostIn) * (1.0 - fresh) * (1.0 - endGrain * 0.5);
@@ -270,64 +302,23 @@ void main(){
         col = mix(col, dc, sat(mk * A.z)); rough = mix(rough, 0.95, mk);
         if(mk * A.z > sMark){ sMark = mk * A.z; sMarkCol = dc; }
       } else {
-        // a paper label: the image itself, and it has had the same years, sun, damp, grime and spills as the wood under it
+        // a paper label pasted on the boards only (one pasted over battens is a sheet of its own: mat 5, sheet.js)
         float weather = sat(0.40 * age + 0.35 * sun + 0.30 * dampK + 0.25 * dirtK + 0.30 * uGr.x + 0.25 * uGr.y);
-        float worn = A.w + 0.6 * weather;
-        // A stencil or typed text is printed in the mark's colour on a paper ground, with a margin round it;
-        // a picture the user loaded is the label as it is.
-        bool printed = uDkP[i].w > 0.5;
-        float edgeUV = min(min(uvl.x, 1.0 - uvl.x), min(uvl.y, 1.0 - uvl.y));
-        float rim = printed ? 1.0 - smoothstep(0.0, 0.07, edgeUV) : sat((1.0 - soft) * 2.5);   // near the label's own edge: it lifts and browns first
-        float labCov = cov;
-        vec3 inkLin = srgb2lin(tx.rgb);
-        if(printed){
-          vec2 gu = (uvl.xy - 0.5) * 1.22 + 0.5;
-          float glyph = (gu.x > 0.0 && gu.x < 1.0 && gu.y > 0.0 && gu.y < 1.0) ? decalTex(i, gu, uvl.z).a : 0.0;
-          inkLin = mix(vec3(0.83, 0.79, 0.68), dc, smoothstep(0.35, 0.65, glyph));
-          labCov = (1.0 - 0.9 * ghostIn) * (1.0 - fresh) * (1.0 - endGrain * 0.5) * smoothstep(0.0, 0.004, edgeUV);
-        }
-        // Pasted over a batten, it was stretched across the step: over the batten's sides and the corner
-        // beside it the paper is not stuck down but taut, a little paler; worn or weathered, that is where it
-        // goes first. Over a board gap or an arris it holds while new and cracks as it ages.
-        float overK = uDkP[i].z;
-        float facing = A.x < 0.5 ? abs(dot(normalize(vNrm), uDkN[i].xyz)) : 1.0;
-        float onSide = overK * (1.0 - smoothstep(0.75, 0.95, facing));                       // the step itself
-        float bridged = max(onSide, overK * (1.0 - smoothstep(0.003, 0.018, nearB + 0.006 * (vnoise(vRest * 30.0 + 2.0) - 0.5))));
+        float worn = A.w + 0.6 * weather, rim, labK;
+        vec3 paper = labelPaper(i, tx, uvl, soft, weather, age, sun, dampK, fireH, blot, fine, rim, labK);
+        float labCov = uDkP[i].w > 0.5 ? (1.0 - 0.9 * ghostIn) * (1.0 - fresh) * (1.0 - endGrain * 0.5) * labK : cov;
+        // over a board gap or an arris it holds while new and cracks as it ages; it never lies down the side of a step
         float stepK = (1.0 - smoothstep(0.0012, 0.0025 + 0.006 * weather * (0.5 + blot), e + 0.0015 * (fine - 0.5))) * smoothstep(0.15, 0.45, worn);
-        // a few soft creases where it was smoothed down into the corner
-        float cx = nearB / (0.005 + 0.003 * vnoise(vRest * 14.0)) + 3.5 * fbm2(vRest * 26.0 + 9.0) + 1.5 * gnoise(vRest * 70.0);
-        float crease = pow(1.0 - abs(fract(cx) - 0.5) * 2.0, 4.0) * overK * (1.0 - smoothstep(0.004, 0.03, nearB)) * smoothstep(0.35, 0.8, vnoise(vRest * 16.0 + 4.0)) * (1.0 - onSide);
-        // paper comes away in pieces, not specks; the stretched parts first
-        float tear = smoothstep(0.46, 0.54, A.w * (0.2 + 1.7 * blot * blot + 0.8 * wear) + weather * (0.05 + 0.6 * blot * blot + 0.45 * rim)
-                                 + bridged * (0.25 + 0.9 * worn) + 0.12 * (fine - 0.5));
+        float sideOK = A.x < 0.5 ? smoothstep(0.75, 0.95, abs(dot(normalize(vNrm), uDkN[i].xyz))) : 1.0;
+        // paper comes away in pieces, not specks
+        float tear = smoothstep(0.46, 0.54, A.w * (0.2 + 1.7 * blot * blot + 0.8 * wear) + weather * (0.05 + 0.6 * blot * blot + 0.45 * rim) + 0.12 * (fine - 0.5));
         tear = max(tear, stepK);
-        float sideOK = A.x < 0.5 ? max(smoothstep(0.75, 0.95, facing), overK) : 1.0;       // not down the side of a step unless it was stretched over it
         float pa = smoothstep(0.4, 0.6, labCov) * (1.0 - tear) * sideOK * A.z;
-        // ink fades in the sun; the paper yellows, most at its edges; brown spots come with age and damp
-        vec3 ink = inkLin;
-        ink = mix(ink, mix(vec3(luma(ink)), ink, 0.6) * 0.5 + 0.5 * max(ink, vec3(luma(ink))), sat(0.7 * sun + 0.2 * age));
-        vec3 paper = ink * mix(vec3(1.0), vec3(0.80, 0.68, 0.48), sat(0.15 + 0.75 * weather * (0.6 + 0.5 * blot) + 0.5 * rim * weather)) * (0.92 + 0.16 * blot);
-        float fox = smoothstep(0.80, 0.86, vnoise(vRest * 160.0 + 17.0 * float(i))) * sat(age * 1.4 + dampK) * (0.5 + 0.5 * fine);
-        paper = mix(paper, paper * vec3(0.62, 0.45, 0.28), fox * 0.8);
-        // water it has drunk dries to a tea-coloured patch with a darker tide line
-        float ws = sat((0.8 * uGr.x + 0.7 * uGr.y + 0.6 * dampK) * 1.3);
-        if(ws > 0.02){
-          float wt = 0.5 + 0.5 * fbm2(vRest * 6.5 + 11.0 * float(i)), wl = 1.0 - 0.6 * ws;
-          paper = mix(paper, paper * vec3(0.86, 0.74, 0.56), step(wl, wt) * 0.8);
-          paper *= 1.0 - 0.35 * (1.0 - smoothstep(0.0, 0.012, abs(wt - wl)));
-        }
-        // paper goes first in a fire: it browns, then burns back to a black curled edge
-        float burnP = smoothstep(0.15, 0.24, fireH + 0.08 * (blot - 0.5) + 0.03 * (fine - 0.5));
-        paper = mix(paper, paper * vec3(0.60, 0.40, 0.20), smoothstep(0.05, 0.17, fireH));
-        paper = mix(paper, vec3(0.02, 0.016, 0.012), sat(burnP * 4.0) * (1.0 - burnP));
-        pa *= 1.0 - burnP;
-        // the torn edge shows pale fibres
-        float fringe = tear * (1.0 - tear) * 4.0 * smoothstep(0.4, 0.6, labCov) * sideOK;
-        paper = mix(paper, paper * 1.06 + 0.01, bridged * 0.6);                              // taut, not soaked onto the wood
+        pa *= 1.0 - smoothstep(0.15, 0.24, fireH + 0.08 * (blot - 0.5) + 0.03 * (fine - 0.5));   // burnt back
+        float fringe = tear * (1.0 - tear) * 4.0 * smoothstep(0.4, 0.6, labCov) * sideOK;          // the torn edge shows pale fibres
         if(pa > sMark){ sMark = pa; sMarkCol = paper; }
         col = mix(col, paper, pa); col = mix(col, vec3(0.62, 0.58, 0.50), fringe * 0.35 * A.z);
         rough = mix(rough, 0.82, pa); h += pa * 0.00012 - pa * 0.00008 * fine; cav = mix(cav, 1.0, pa);
-        h += pa * crease * 0.0010; col = mix(col, col * (1.0 + 0.10 * crease) + 0.015 * crease, pa);     // a crease is a ridge, and the fibres whiten along it
         gLabel = max(gLabel, pa);
       }
     }
@@ -387,13 +378,27 @@ void main(){
     h += rustM * 0.00022 * (n3 - 0.3);
     col = mix(col, col * vec3(0.8, 0.7, 0.6), age * 0.3);
     soak = 0.0; lateK = 0.5;
+  } else if(mat == 5){
+    // a label sheet (sheet.js): paper stretched over the battens. vExtra.x is its marking slot; e is the
+    // distance to the nearest tear or edge (the face attribute), where the torn fibres show pale.
+    int li = int(vExtra.x + 0.5);
+    vec4 tx = vec4(1.0); float soft = 1.0; vec3 uvl = vec3(0.5, 0.5, 0.0);
+    decalAt(li, vRest, texel, tx, soft, uvl);
+    float fine = vnoise(vRest * 700.0), blot = 0.5 + 0.5 * fbm2(vRest * 30.0 + 5.0 * float(li));
+    float weather = sat(0.40 * age + 0.35 * sun + 0.30 * dampK + 0.25 * dirtK + 0.30 * uGr.x + 0.25 * uGr.y), rim, labK;
+    col = labelPaper(li, tx, uvl, soft, weather, age, sun, dampK, fireH, blot, fine, rim, labK);
+    float fringe = 1.0 - smoothstep(0.0, 0.0025, e + 0.001 * (fine - 0.5));
+    col = mix(col, vec3(0.62, 0.58, 0.50), fringe * 0.45);
+    rough = 0.82; metal = 0.0; cav = 1.0;
+    h = 0.00006 * (fine - 0.5) + 0.00004 * gnoise(vRest * 300.0);
+    sMark = 1.0; sMarkCol = col; sFlat = col; soak = 0.6; lateK = 0.5;
   } else if(mat == 2){
     col = vec3(0.012, 0.010, 0.008); rough = 1.0; ao = 0.2;
   } else {
     col = vec3(0.3); rough = 0.6; metal = 1.0;
   }
 
-  if(mat < 2){
+  if(mat < 2 || mat == 5){
     // rising damp: ground water wicks up, darkest at the bottom, with a tide line
     float wick = mat == 0 ? 1.0 : 0.45;
     float front = dampK * uModelH * (0.42 + 0.30 * n1 + 0.10 * n2 + 0.25 * soak) * wick;
@@ -477,7 +482,10 @@ void main(){
     if(uFire.x > 0.0){
       // ---- fire: see NOTES (Fire). It came last, so it covers everything above ----
       float H = fireH;
-      if(mat == 0){
+      if(mat == 5){
+        // paper: it browned and charred with the wood under it (labelPaper), and takes soot
+        sChar = smoothstep(0.15, 0.24, H);
+      } else if(mat == 0){
         // Toasting follows the grain, it is not a cloud laid over it: the latewood lines darken first and
         // furthest, the soft earlywood between goes orange-brown and shrinks back, so the rings stand up;
         // arrises toast before flat faces. (Nich's references, 2026-11-20: a flamed crate, torched boards.)
@@ -557,7 +565,7 @@ void main(){
   }
   h = mix(h, nailH, nailHead);          // whatever happened to the wood did not happen to the nail
 
-  if(uStyle > 0 && mat < 2){
+  if(uStyle > 0 && (mat < 2 || mat == 5)){
     float lw = uStA.x, detail = uStA.y, baked = uStA.z;
     vec3 Ng = normalize(vNrm);
     // what an unlit picture has to say about light: a fixed sun over the left shoulder, softened by occlusion
@@ -586,7 +594,7 @@ void main(){
     if(uStyle == 1){
       // cel: flat colour, a few bold grain lines, a dark outline, shadows in a second flat tone
       vec3 base;
-      if(mat == 0){
+      if(mat != 1){
         base = mix(sFlat, sFlat * vec3(0.80, 0.66, 0.52), age * 0.6);
         base = mix(vec3(luma(base)), base, 1.2) * 1.08;                                  // cel colour is cleaner than life
         base = mix(base, vec3(0.50, 0.49, 0.47), smoothstep(0.42, 0.50, sGrey + 0.05 * wob) * 0.9);
@@ -642,7 +650,7 @@ void main(){
       // shadow is a second glaze, and pigment pools where a wash stops.
       float gran = uStB.x, wet = uStB.y, pencil = uStB.z;
       vec3 pig;
-      if(mat == 0){
+      if(mat != 1){
         pig = mix(sFlat, sFlat * vec3(0.82, 0.68, 0.54), age * 0.6);
         pig = mix(pig, vec3(0.40, 0.42, 0.46), sGrey * 0.85);
         float softGrain = lineCov(gd, lw * 2.2, texel * 2.5) * gbreak * (1.0 - smoothstep(0.35, 0.8, sFw / ringN)) * step(1.05, sKrho);
@@ -889,7 +897,7 @@ export function createBaker(gl) {
       u['uDecal' + i] = tg ? mk.tex : blank;
       if (!tg) { A[i * 4] = -1; continue; }
       const w = mk.size, h = mk.size / (mk.aspect || 1), win = mk.over ? tg.proud : tg.skin;
-      A.set([tg.kind === 'cyl' ? 1 : 0, MODES[mk.mode] || 0, mk.opacity, mk.wear], i * 4);
+      A.set([tg.kind === 'cyl' ? 1 : 0, mk.sheet ? 4 : MODES[mk.mode] || 0, mk.opacity, mk.wear], i * 4);
       U.set([...tg.u, 1 / w], i * 4); V.set([...tg.v, 1 / h], i * 4);
       Nn.set([...tg.n, (win[0] + win[1]) / 2], i * 4); O.set([...tg.o, (win[1] - win[0]) / 2], i * 4);
       const c = mk.color || [0.02, 0.02, 0.02];

@@ -46,8 +46,9 @@ export function addLabelSheet(model, mk, i, seed) {
   const H = new Float32Array(nx * ny).fill(-1);
   const [dmin, dmax] = tg.proud;
 
-  // 1. supports: rasterise the outward-facing LOD0 triangles
-  const g = model.lod[0], P = g.p, I = g.idx;
+  // 1. supports: rasterise the outward-facing triangles of every level of detail (LOD1's battens are square
+  // where LOD0's are chamfered; the sheet has to clear both, or a corner shows through at a distance)
+  for (const g of model.lod) { const P = g.p, I = g.idx;
   for (let t = 0; t < I.length; t += 3) {
     const v = [0, 1, 2].map((k) => { const j = I[t + k] * 3; const d = sub([P[j], P[j + 1], P[j + 2]], C); return [dot(d, LX), dot(d, LY), dot(d, N)]; });
     if (v.every((q) => q[2] < dmin || q[2] > dmax)) continue;
@@ -65,7 +66,7 @@ export function addLabelSheet(model, mk, i, seed) {
       if (d < dmin || d > dmax) continue;
       const k = iy * nx + ix; if (d > H[k]) H[k] = d;
     }
-  }
+  } }
   // 2. the taut sheet: hang from the supports, never below them; nothing where no support is in reach
   const R = Math.ceil(REACH / STEP), Pz = new Float32Array(nx * ny).fill(-1);
   for (let iy = 0; iy < ny; iy++) for (let ix = 0; ix < nx; ix++) {
@@ -103,7 +104,15 @@ export function addLabelSheet(model, mk, i, seed) {
   const pos = (ix, iy) => madd(add(add(C, mul(LX, gx(ix))), mul(LY, gy(iy))), N, Pz[iy * nx + ix] + LIFT);
   const z = (ix, iy) => { const q = Pz[Math.min(ny - 1, Math.max(0, iy)) * nx + Math.min(nx - 1, Math.max(0, ix))]; return q < -0.5 ? Pz[iy * nx + ix] : q; };
   // a point of the sheet at fractional grid coordinates (fx, fy), on an edge of a cell
+  // for the far level: the highest the fine sheet gets within one coarse cell of a point
+  let reachK = 0;
+  const peak = (fx, fy) => {
+    const x0 = Math.max(0, Math.floor(fx) - reachK), x1 = Math.min(nx - 1, Math.ceil(fx) + reachK), y0 = Math.max(0, Math.floor(fy) - reachK), y1 = Math.min(ny - 1, Math.ceil(fy) + reachK);
+    let m = -1; for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) m = Math.max(m, Pz[y * nx + x]);
+    return m;
+  };
   const hAt = (fx, fy) => {
+    if (reachK) return peak(fx, fy);
     const x0 = Math.floor(fx), y0 = Math.floor(fy), x1 = Math.min(nx - 1, x0 + 1), y1 = Math.min(ny - 1, y0 + 1), tx = fx - x0, ty = fy - y0;
     const q = (x, y) => Pz[y * nx + x];
     return (q(x0, y0) * (1 - tx) + q(x1, y0) * tx) * (1 - ty) + (q(x0, y1) * (1 - tx) + q(x1, y1) * tx) * ty;
@@ -118,7 +127,8 @@ export function addLabelSheet(model, mk, i, seed) {
       const x = -w / 2 + (w * fx) / (nx - 1), y = -h / 2 + (h * fy) / (ny - 1);
       const p = madd(add(add(C, mul(LX, x)), mul(LY, y)), N, hAt(fx, fy) + LIFT);
       // face.x carries how far inside the paper this point is (0 on a torn edge), for the bake's pale fibres
-      verts.push({ p, n, t: norm(madd(LX, N, dzx)), f: [x + w / 2, y + h / 2], face: [Math.max(0, 0.5 - dr) * 0.02, 1, 2, 2], rest: p });
+      const rimD = Math.min(fx, nx - 1 - fx, fy, ny - 1 - fy) * STEP;          // the label's own cut edge is an edge too
+      verts.push({ p, n, t: norm(madd(LX, N, dzx)), f: [x + w / 2, y + h / 2], face: [Math.min(rimD, Math.max(0, 0.5 - dr) * 0.02), 1, 2, 2], rest: p });
       cache.set(key, verts.length - 1); return verts.length - 1;
     };
     // clip a triangle of grid points against drive < 0.5 (one plane, linear along each edge)
@@ -146,7 +156,7 @@ export function addLabelSheet(model, mk, i, seed) {
   };
   const fine = mesh(1); emitMesh(model, isl, fine.verts, fine.tris, [0]);
   // the far level: the same sheet every 4th station (bake vertices only once, from the fine mesh)
-  const coarse = mesh(4);
+  reachK = 3; const coarse = mesh(4); reachK = 0;
   model.lod.forEach((geo, li) => {
     if (li === 0) return;
     const gi = coarse.verts.map((v) => { geo.p.push(...v.p); geo.n.push(...v.n); geo.t.push(...v.t); geo.f.push(...v.f); geo.isl.push(isl.id); return geo.nv++; });

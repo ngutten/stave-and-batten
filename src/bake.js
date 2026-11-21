@@ -638,8 +638,10 @@ void main(){
       vec2 wv = worley(pp / 0.0045 + uSeed);
       float dots = (1.0 - smoothstep(0.16, 0.30, wv.x)) * step(wv.y, 0.9 * max(max(max(sDirt * 0.8, sRust), gMoss * 0.9), max(sSoot, sScorch * 0.7)) - 0.12);
       float ink = max(max(outline, grain * 0.85), max(max(kline, kin * 0.8), cuts));
-      ink = max(max(ink, hatch), max(max(dots, nailRing), smoothstep(0.15, 0.35, sMark)));
-      float press = 0.72 + 0.28 * vnoise(vec3(pp * 70.0, 2.0));                          // the pen floods and runs dry
+      // a marking is inked as dark as it is: a black stencil solid, a cream label as paper with its printing inked
+      float markDark = smoothstep(0.62, 0.30, pow(luma(sMarkCol), 1.0 / 2.2));
+      ink = max(max(ink, hatch), max(max(dots, nailRing), smoothstep(0.15, 0.35, sMark) * markDark));
+      float press = stylePress(pp);                                                     // the pen floods and runs dry
       col = mix(paper, uInkCol, sat(ink * press * 1.08));
       // char is filled in solid with the brush (the pen's flooding would show as blocks), its checks left as paper
       float charFill = smoothstep(0.45, 0.55, sChar) * (1.0 - smoothstep(0.3, 0.6, sCharCrack));

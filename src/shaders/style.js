@@ -32,6 +32,9 @@ vec3 styleCel(vec3 col, vec3 N, vec3 V, vec3 L, float shadow, float ao, vec3 rim
 }
 
 // ---- pen and ink: shadow is hatching ----
+// How much ink the pen lays down here. Gradient noise, not value noise: value noise shows its square grid as
+// blotches across a large fill (a big stencil, a label, a shadow pushed to solid). Gentle, so a fill stays a fill.
+float stylePress(vec2 pp){ return 0.94 + 0.06 * sat(0.5 + 0.6 * gnoise(vec3(pp * 45.0, 2.0))); }
 // How dark the pen should make it: 0 bare paper, 1 and beyond black. strength above 1 pushes shadows into solid black.
 float styleInkTone(float light, float strength){ return strength * smoothstep(0.25, 1.0, 1.0 - light); }
 
@@ -57,11 +60,11 @@ float styleHatch(vec2 pp, float tone, float pen, float spacing, float aa){
     ink = max(ink, mix(near, far, smoothstep(0.25, 0.6, aa / sp)));
   }
   // past that the shadow is filled in, evenly: ink laid on with the flat of the nib
-  return max(ink, smoothstep(1.05, 1.55, tone) * (0.90 + 0.10 * vnoise(vec3(pp * 300.0, 6.0))));
+  return max(ink, smoothstep(1.05, 1.55, tone) * (0.93 + 0.07 * sat(0.5 + 0.6 * gnoise(vec3(pp * 160.0, 6.0)))));
 }
 vec3 styleInk(vec3 col, vec3 inkCol, vec2 pp, float light, float strength, float pen, float spacing, float aa){
   float ink = styleHatch(pp, styleInkTone(light, strength), pen, spacing, aa);
-  return mix(col, inkCol, ink * (0.72 + 0.28 * vnoise(vec3(pp * 70.0, 2.0))));
+  return mix(col, inkCol, ink * stylePress(pp));
 }
 
 // ---- watercolour: shadow is a second glaze of the same paint ----

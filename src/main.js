@@ -95,7 +95,9 @@ try {
     }
     const marks = app.marks[app.make].map((mk, i) => {
       const t = app.markLib.get(mk, app.make + i);
-      return t && { ...mk, tex: mk.mode === 'label' ? t.texLabel : t.tex, aspect: t.aspect, color: hexToRgb(mk.color) };
+      // a label from a stencil or typed text is printed (the shader lays ink on paper); a loaded picture is the label itself
+      const printed = mk.mode === 'label' && mk.src !== 'user';
+      return t && { ...mk, tex: mk.mode === 'label' && !printed ? t.texLabel : t.tex, printed, aspect: t.aspect, color: hexToRgb(mk.color) };
     });
     const r = app.baker.bake(app.model, app.look, { geoKey: app.geoKey, profile: app.profile, scale: draft ? app.draftScale : 1, occDirs: draft ? 32 : 96, marks, style: styleNow(), grunge: app.grunge });
     app.last = r;
@@ -202,7 +204,7 @@ try {
     if (!location.hash.includes('idle')) setTimeout(() => { try { app.rebuild(); } catch (e) { fail(e); } }, 0);
   };
   requestAnimationFrame(boot);
-  const frame = () => { app.view.resize(); if (app.view.S.dirty) app.view.render(); requestAnimationFrame(frame); };
+  const frame = () => { app.view.resize(); app.view.tick(); if (app.view.S.dirty) app.view.render(); requestAnimationFrame(frame); };
   frame();
 } catch (e) { fail(e); }
 

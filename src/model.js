@@ -252,6 +252,47 @@ export function addPlank(model, o) {
       }
     }
   };
+  if (o.edges) {
+    // Long edges eaten back along the length (fire), square ends. o.edges = { xs: stations along the
+    // length from -L/2 to L/2, l: inset of the -y edge at each, r: inset of the +y edge }. The islands
+    // keep the nominal size, so texel density matches a sound board; e is measured from the real edges.
+    const { xs, l, r } = o.edges, n = xs.length;
+    const yl = l.map((v) => -hy + v), yr = r.map((v) => hy - v), mean = (a) => a.reduce((s, v) => s + v, 0) / a.length;
+    const ylm = -hy + mean(l), yrm = hy - mean(r);
+    const strip = (k) => { const t = []; for (let i = 0; i < k - 1; i++) t.push([2 * i, 2 * i + 1, 2 * i + 3], [2 * i, 2 * i + 3, 2 * i + 2]); return t; };
+    for (const [bit, z, U, Vv, flipV] of [[FACE.PZ, hz, ax, ay, false], [FACE.NZ, -hz, ax, neg(ay), true]]) {
+      if (!(mask & bit)) continue;
+      const isl = addIsland(model, { w: L, h: W, mat, seed, extra: o.extra || [0, 0, 0, 0], part, tag, dens: dens(bit) });
+      const N = norm(cross(U, Vv));
+      isl.U = U; isl.V = Vv; isl.N = N;
+      isl.fOf = (p) => { const d = sub(p, c); return [dot(d, ax) + hx, flipV ? hy - dot(d, ay) : dot(d, ay) + hy]; };
+      const fy = (y) => (flipV ? hy - y : y + hy);
+      const vs = (X, YL, YR) => { const v = []; X.forEach((x, i) => { const wl = YR[i] - YL[i];
+        v.push({ x, y: YL[i], z, f: [x + hx, fy(YL[i])], face: [x + hx, 0, L, wl] }, { x, y: YR[i], z, f: [x + hx, fy(YR[i])], face: [x + hx, wl, L, wl] }); }); return v; };
+      emit(isl, vs(xs, yl, yr), strip(n), N, U, 'near');
+      emit(isl, vs([-hx, hx], [ylm, ylm], [yrm, yrm]), strip(2), N, U, 'far');
+      out[bit] = isl;
+    }
+    for (const [bit, Y, ym, U, Vv] of [[FACE.PY, yr, yrm, ax, neg(az)], [FACE.NY, yl, ylm, ax, az]]) {
+      if (!(mask & bit)) continue;
+      const isl = addIsland(model, { w: L, h: T, mat, seed, extra: o.extra || [0, 0, 0, 0], part, tag, dens: dens(bit) });
+      const N = norm(cross(U, Vv)), top = bit === FACE.PY, fv = (zz) => (top ? hz - zz : zz + hz);
+      const vs = (X, YY) => { const v = []; X.forEach((x, i) => v.push({ x, y: YY[i], z: hz, f: [x + hx, fv(hz)], face: [x + hx, fv(hz), L, T] }, { x, y: YY[i], z: -hz, f: [x + hx, fv(-hz)], face: [x + hx, fv(-hz), L, T] })); return v; };
+      emit(isl, vs(xs, Y), strip(n), N, U, 'near');
+      emit(isl, vs([-hx, hx], [ym, ym]), strip(2), N, U, 'far');
+      out[bit] = isl;
+    }
+    for (const [bit, x, i, sgn] of [[FACE.NX, -hx, 0, -1], [FACE.PX, hx, n - 1, 1]]) {
+      if (!(mask & bit)) continue;
+      const wl = yr[i] - yl[i], U = mul(ay, sgn), N = mul(ax, sgn);
+      const isl = addIsland(model, { w: W, h: T, mat, seed, extra: o.extra || [0, 0, 0, 0], part, tag, dens: dens(bit) });
+      const fx = (y) => (sgn > 0 ? y + hy : hy - y);
+      const v = [[yl[i], hz], [yr[i], hz], [yl[i], -hz], [yr[i], -hz]].map(([y, zz]) => ({ x, y, z: zz, f: [fx(y), zz + hz], face: [fx(y) - fx(sgn > 0 ? yl[i] : yr[i]), zz + hz, wl, T] }));
+      emit(isl, v, [[0, 1, 3], [0, 3, 2]], N, U);
+      out[bit] = isl;
+    }
+    return out;
+  }
   // broad faces
   for (const [bit, z, XL, XR, U, Vv, flipV] of [[FACE.PZ, hz, xl, xr, ax, ay, false], [FACE.NZ, -hz, xlb, xrb, ax, neg(ay), true]]) {
     if (!(mask & bit)) continue;

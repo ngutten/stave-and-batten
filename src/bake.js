@@ -44,7 +44,7 @@ uniform vec4 uDkV[NDECAL];   // v axis, 1 / height
 uniform vec4 uDkN[NDECAL];   // normal, depth centre
 uniform vec4 uDkO[NDECAL];   // origin, depth half window
 uniform vec4 uDkC[NDECAL];   // colour, rotation
-uniform vec4 uDkP[NDECAL];   // centre offset (m) in u and v, 1 if over battens; barrel profile is in uCyl
+uniform vec4 uDkP[NDECAL];   // centre offset (m) in u and v, 1 if over battens, 1 if a printed label; barrel profile is in uCyl
 uniform vec4 uCyl;           // head radius, bilge radius, height
 vec4 decalTex(int i, vec2 uv, float lod){
   if(i == 0) return textureLod(uDecal0, uv, lod); if(i == 1) return textureLod(uDecal1, uv, lod);
@@ -272,24 +272,39 @@ void main(){
       } else {
         // a paper label: the image itself, and it has had the same years, sun, damp, grime and spills as the wood under it
         float weather = sat(0.40 * age + 0.35 * sun + 0.30 * dampK + 0.25 * dirtK + 0.30 * uGr.x + 0.25 * uGr.y);
-        float rim = sat((1.0 - soft) * 2.5);                                   // near the label's own edge: it lifts and browns first
-        // paper cannot follow a step: where the surface under it ends (a board gap, a batten's edge) it cracks,
-        // and beside a batten it never reached into the corner
-        float stepK = 1.0 - smoothstep(0.0012, 0.0025 + 0.006 * weather * (0.5 + blot), e + 0.0015 * (fine - 0.5));
-        // pasted over battens, it was pressed down into the corner beside each one: it creased along the batten,
-        // and right in the corner, where it bridged, it split
-        float bridged = uDkP[i].z * (1.0 - smoothstep(0.004, 0.026, nearB + 0.006 * (vnoise(vRest * 30.0 + 2.0) - 0.5)));
-        // ridges roughly along the batten, wandering, some running out at a slant, none evenly spaced
+        float worn = A.w + 0.6 * weather;
+        // A stencil or typed text is printed in the mark's colour on a paper ground, with a margin round it;
+        // a picture the user loaded is the label as it is.
+        bool printed = uDkP[i].w > 0.5;
+        float edgeUV = min(min(uvl.x, 1.0 - uvl.x), min(uvl.y, 1.0 - uvl.y));
+        float rim = printed ? 1.0 - smoothstep(0.0, 0.07, edgeUV) : sat((1.0 - soft) * 2.5);   // near the label's own edge: it lifts and browns first
+        float labCov = cov;
+        vec3 inkLin = srgb2lin(tx.rgb);
+        if(printed){
+          vec2 gu = (uvl.xy - 0.5) * 1.22 + 0.5;
+          float glyph = (gu.x > 0.0 && gu.x < 1.0 && gu.y > 0.0 && gu.y < 1.0) ? decalTex(i, gu, uvl.z).a : 0.0;
+          inkLin = mix(vec3(0.83, 0.79, 0.68), dc, smoothstep(0.35, 0.65, glyph));
+          labCov = (1.0 - 0.9 * ghostIn) * (1.0 - fresh) * (1.0 - endGrain * 0.5) * smoothstep(0.0, 0.004, edgeUV);
+        }
+        // Pasted over a batten, it was stretched across the step: over the batten's sides and the corner
+        // beside it the paper is not stuck down but taut, a little paler; worn or weathered, that is where it
+        // goes first. Over a board gap or an arris it holds while new and cracks as it ages.
+        float overK = uDkP[i].z;
+        float facing = A.x < 0.5 ? abs(dot(normalize(vNrm), uDkN[i].xyz)) : 1.0;
+        float onSide = overK * (1.0 - smoothstep(0.75, 0.95, facing));                       // the step itself
+        float bridged = max(onSide, overK * (1.0 - smoothstep(0.003, 0.018, nearB + 0.006 * (vnoise(vRest * 30.0 + 2.0) - 0.5))));
+        float stepK = (1.0 - smoothstep(0.0012, 0.0025 + 0.006 * weather * (0.5 + blot), e + 0.0015 * (fine - 0.5))) * smoothstep(0.15, 0.45, worn);
+        // a few soft creases where it was smoothed down into the corner
         float cx = nearB / (0.005 + 0.003 * vnoise(vRest * 14.0)) + 3.5 * fbm2(vRest * 26.0 + 9.0) + 1.5 * gnoise(vRest * 70.0);
-        float crease = pow(1.0 - abs(fract(cx) - 0.5) * 2.0, 4.0) * bridged * smoothstep(0.25, 0.7, vnoise(vRest * 16.0 + 4.0) + 0.3 * bridged);
-        float corner = uDkP[i].z * (1.0 - smoothstep(0.0015, 0.004, nearB + 0.003 * (blot - 0.5) + 0.002 * (fine - 0.5)));
-        float facing = A.x < 0.5 ? smoothstep(0.75, 0.95, abs(dot(normalize(vNrm), uDkN[i].xyz))) : 1.0;   // not down the side of a step
-        // paper comes away in pieces, not specks
-        float tear = smoothstep(0.46, 0.54, A.w * (0.2 + 1.7 * blot * blot + 0.8 * wear) + weather * (0.05 + 0.6 * blot * blot + 0.45 * rim) + 0.12 * (fine - 0.5));
-        tear = max(tear, max(stepK, corner));
-        float pa = smoothstep(0.4, 0.6, cov) * (1.0 - tear) * facing * A.z;
+        float crease = pow(1.0 - abs(fract(cx) - 0.5) * 2.0, 4.0) * overK * (1.0 - smoothstep(0.004, 0.03, nearB)) * smoothstep(0.35, 0.8, vnoise(vRest * 16.0 + 4.0)) * (1.0 - onSide);
+        // paper comes away in pieces, not specks; the stretched parts first
+        float tear = smoothstep(0.46, 0.54, A.w * (0.2 + 1.7 * blot * blot + 0.8 * wear) + weather * (0.05 + 0.6 * blot * blot + 0.45 * rim)
+                                 + bridged * (0.25 + 0.9 * worn) + 0.12 * (fine - 0.5));
+        tear = max(tear, stepK);
+        float sideOK = A.x < 0.5 ? max(smoothstep(0.75, 0.95, facing), overK) : 1.0;       // not down the side of a step unless it was stretched over it
+        float pa = smoothstep(0.4, 0.6, labCov) * (1.0 - tear) * sideOK * A.z;
         // ink fades in the sun; the paper yellows, most at its edges; brown spots come with age and damp
-        vec3 ink = srgb2lin(tx.rgb);
+        vec3 ink = inkLin;
         ink = mix(ink, mix(vec3(luma(ink)), ink, 0.6) * 0.5 + 0.5 * max(ink, vec3(luma(ink))), sat(0.7 * sun + 0.2 * age));
         vec3 paper = ink * mix(vec3(1.0), vec3(0.80, 0.68, 0.48), sat(0.15 + 0.75 * weather * (0.6 + 0.5 * blot) + 0.5 * rim * weather)) * (0.92 + 0.16 * blot);
         float fox = smoothstep(0.80, 0.86, vnoise(vRest * 160.0 + 17.0 * float(i))) * sat(age * 1.4 + dampK) * (0.5 + 0.5 * fine);
@@ -307,7 +322,8 @@ void main(){
         paper = mix(paper, vec3(0.02, 0.016, 0.012), sat(burnP * 4.0) * (1.0 - burnP));
         pa *= 1.0 - burnP;
         // the torn edge shows pale fibres
-        float fringe = tear * (1.0 - tear) * 4.0 * smoothstep(0.4, 0.6, cov) * facing;
+        float fringe = tear * (1.0 - tear) * 4.0 * smoothstep(0.4, 0.6, labCov) * sideOK;
+        paper = mix(paper, paper * 1.06 + 0.01, bridged * 0.6);                              // taut, not soaked onto the wood
         if(pa > sMark){ sMark = pa; sMarkCol = paper; }
         col = mix(col, paper, pa); col = mix(col, vec3(0.62, 0.58, 0.50), fringe * 0.35 * A.z);
         rough = mix(rough, 0.82, pa); h += pa * 0.00012 - pa * 0.00008 * fine; cav = mix(cav, 1.0, pa);
@@ -879,7 +895,7 @@ export function createBaker(gl) {
       const c = mk.color || [0.02, 0.02, 0.02];
       C.set([Math.pow(c[0], 2.2), Math.pow(c[1], 2.2), Math.pow(c[2], 2.2), (mk.rot || 0) * Math.PI / 180], i * 4);
       // x, y in -1..1 place the centre within the target, leaving the image inside it
-      Pp.set([mk.x * Math.max(0, tg.w - w) / 2, mk.y * Math.max(0, tg.h - h) / 2, mk.over ? 1 : 0, 0], i * 4);
+      Pp.set([mk.x * Math.max(0, tg.w - w) / 2, mk.y * Math.max(0, tg.h - h) / 2, mk.over ? 1 : 0, mk.printed ? 1 : 0], i * 4);
       if (tg.cyl) u.uCyl = [...tg.cyl, 0];
     }
     return u;

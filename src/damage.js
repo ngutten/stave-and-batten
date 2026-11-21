@@ -91,21 +91,30 @@ export function fireField(amount, kind, seed, box) {
   return { amount: f, kind, seat, r0, spread, Lh, heat, burns: f > 0 };
 }
 
-// Along a piece from a0 to a1, which stretches the fire consumed (heat over 1)
-// and which are left. heatAt(a) is the field at a point; the burn front
-// wanders a little (a smooth wobble from R, so the same seed burns the same way).
-export function burnSpans(heatAt, a0, a1, R, step = 0.012) {
-  const p1 = R.range(0, 6.28), p2 = R.range(0, 6.28), k = R.range(0.9, 1.1);
-  const burnt = (a) => heatAt(a) * k * (1 + 0.12 * Math.sin(a * 23 + p1) + 0.07 * Math.sin(a * 61 + p2)) > 1;
-  const n = Math.max(2, Math.ceil((a1 - a0) / step)), kept = [], gone = [];
-  let start = a0, state = burnt(a0), prev = a0;
-  for (let i = 1; i <= n; i++) {
-    const a = a0 + ((a1 - a0) * i) / n, g = burnt(a);
-    if (g !== state) { const cut = (prev + a) / 2; (state ? gone : kept).push([start, cut]); start = cut; state = g; }
-    prev = a;
+// Fire eats a board from its long edges, so the gaps between boards open where it burned
+// hottest (Nich: fire does not break a crate; damage does). edgeAt(x, side) is a point on
+// the -1 / +1 edge at x along the length. Returns { xs, l, r } for addPlank's o.edges, or
+// null if nothing is eaten. Irregular: each edge wanders on its own.
+export function eatenEdges(fire, edgeAt, L, W, R, step = 0.01) {
+  if (!fire.burns) return null;
+  const n = Math.max(2, Math.ceil(L / step) + 1), xs = [], l = [], r = [];
+  const ph = [R.range(0, 6.3), R.range(0, 6.3), R.range(0, 6.3), R.range(0, 6.3)];
+  let any = 0, jl = 0, jr = 0, nl = 0, nr = 0;
+  for (let i = 0; i < n; i++) {
+    const x = -L / 2 + (L * i) / (n - 1);
+    // ragged station to station (a random walk that keeps returning), with now and then a deeper bite
+    jl = jl * 0.7 + R.sym(0.45); jr = jr * 0.7 + R.sym(0.45);
+    nl = nl > 0 ? nl - 1 : R.chance(0.05) ? R.int(2, 5) : 0; nr = nr > 0 ? nr - 1 : R.chance(0.05) ? R.int(2, 5) : 0;
+    const eat = (side, a, b, j, notch) => {
+      const h = fire.heat(edgeAt(x, side));
+      const k = Math.max(0, Math.min(1, (h - 0.55) / 0.9));
+      return W * 0.42 * k * k * (3 - 2 * k) * (0.6 + 0.08 * Math.sin(x * 13 + a) + 0.05 * Math.sin(x * 41 + b) + 0.3 * j + (notch ? 0.35 : 0));
+    };
+    const a = Math.max(0, eat(-1, ph[0], ph[1], jl, nl)), b = Math.max(0, eat(1, ph[2], ph[3], jr, nr));
+    const sc = Math.min(1, (W - 0.012) / Math.max(a + b, 1e-9));                    // always leave a sliver
+    xs.push(x); l.push(a * sc); r.push(b * sc); any = Math.max(any, a, b);
   }
-  (state ? gone : kept).push([start, a1]);
-  return { kept, gone, any: gone.length > 0 };
+  return any > 0.001 ? { xs, l, r } : null;
 }
 
 // A rigid motion: rotate by angle about the unit axis through pivot, then translate.

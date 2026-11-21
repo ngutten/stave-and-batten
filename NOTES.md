@@ -62,7 +62,8 @@ Timings are only real after a one-pixel `readPixels`. `gl.finish()` does not wai
 
 - A mark's `over` reaches the shader as `uDkP[i].z`. Only marks sprayed or pasted over battens react to them.
 - **Paint** in a batten's lee (within 3 cm of its edge, `nearB`): the stencil is sampled blurrier (`decalAt` now returns uv and lod), the paint thins, and an overspray mist drifts out. Faces turned away from the spray (a batten's sides) take it thinly.
-- **A paper label** cannot follow a step: it cracks within a few mm of any island edge (board gaps, a batten's edges), splits right in the corner beside a batten, and creases in wandering ridges out to ~2.5 cm. It never lies down the side of a step (`facing`).
+- **A paper label pasted over a batten is stretched across the step**: it lies over the batten's sides and the corner beside it, taut and a little paler, with a few soft creases. Worn or weathered, the stretched parts tear first; over board gaps and arrises it holds while new and cracks as it ages. Without "over", it never lies down the side of a step.
+- **Printed labels**: a stencil or typed text in label mode is printed in the mark's colour on a cream ground with a margin (`uDkP[i].w`, `printed` in main.js); before this they came out white on black. A loaded picture is still the label as it is.
 - **A label ages with the crate**: `weather` (age, sun, damp, grime, spills, wet) yellows it (most at its own rim), foxes it, fades its ink in the sun, tears it in pieces rather than specks, and leaves a tide-lined water stain. Paper drinks a spill deeper than wood and holds more grime (`gLabel`). "Worn away" still adds tearing.
 - **Plain face** (Joinery) leaves the brace or mid rail off one wall, so a label can go on clear boards.
 
@@ -70,11 +71,11 @@ Timings are only real after a one-pixel `readPixels`. `gl.finish()` does not wai
 
 - **The fire is the last thing that happened.** Its block in the material shader runs after all grunge, so char covers patina, grime, moss, paint and labels; nothing has weathered since.
 - **One heat field**, `fireField(...).heat(p)` in `damage.js`, mirrored by `heatAt()` in the bake. Keep the two in step. It is evaluated in **rest space** (`vRest`), so a piece that burned and fell keeps the char it had where it stood. Params: Fire (amount) and Fire was (beside / beneath / inside); the seat is drawn from stream `'fire'`. Model carries `m.fire`; the bake reads it for `uFire` / `uFireSeat`.
-- **What JS knows:** heat over 1 burns through (`burnSpans` along each board and batten, with a smooth per-piece wobble). Burnt-through boards keep their kept stretches where a standing batten still covers them, the rest falls as charred debris. Battens become state 5 (pieces still nailed); a middle piece with both ends burnt stays only if a nail still finds standing board. Burnt ends are `charredEnd` (rounded, thinned toward the hot face), not `ragged`. A fire that burns through **opens** the crate (no liner, all faces, floor card), like damage. Barrel: surface only so far (staves and hoops char and tint, nothing burns through).
+- **Fire does not break anything** (Nich: breaks are the damage dial's; fire and damage combine). What JS does with heat: a board's long edges are eaten back along its length where it burned hottest (`eatenEdges` -> `addPlank`'s `o.edges`: a strip mesh at 1 cm stations at LOD0, a straight average at LOD1), so gaps open and wander; a burnt board emits its side and inner faces so the gaps have walls. The barrel only chars. (A first version burned boards and battens through and dropped the pieces; it left floating geometry and read as impact damage, so it went.)
 - **What only the shader knows:** faces turned to the flames and arrises take more (`fireH`), a batten's ghost shields the board under it for a while, soot rises past the burn (a wider plume) and settles on undersides.
 - **Wood by heat (shader `H`)**, tuned against Nich's reference photos: toasting follows the grain (latewood lines darken first, earlywood goes orange and shrinks back, arrises first); char takes the latewood ridges first, so its front runs ragged along the grain; char is nearly black (linear ~0.01) with sheen on the crowns; alligator blocks staggered row by row, each block keeps fine grain striations and sits at its own height; thin char near the front flakes in slivers to show the scorched wood; deep char has wider checks and ash on block crowns (mostly on upward faces). Iron: temper colours then black scale.
 - **Styles:** facts `sChar`, `sCharCrack`, `sSoot`, `sScorch`, `sAsh`. Ink fills char solid with the brush (its pen `press` noise shows as blocks on a big fill), cel flat black with pale checks, wash a charcoal glaze.
-- Not done: barrel burn-through (staves short, hoops dropping); ash and charcoal lying on the ground; inner faces of an 'inside' fire are only as hot as the field says; draft-quality checks of LOD2 cards with holes.
+- Not done: eaten edges on battens and barrel staves; ash and charcoal on the ground; the dark liner seen through burnt gaps is plain, not charred.
 
 ## Styles
 
@@ -106,6 +107,10 @@ Timings are only real after a one-pixel `readPixels`. `gl.finish()` does not wai
 - While colour is being spread into the cut-away texels, the normal map's alpha is the "has colour" flag. On export only base colour keeps alpha.
 - PNGs with real alpha are encoded by hand in `gltf.js`: a canvas multiplies colour by alpha and would lose the colour under the cut-outs.
 - The card bake is lazy: `app.ensureCards()` runs when LOD2 is viewed or exported, and every re-bake of the model marks it stale.
+
+## Viewer
+
+- When the model's bounds change (debris spreads), the camera glides to the new framing (`S.goal`, eased in `tick()` each frame, about a third of a second). Panning cancels the glide; zooming moves its goal.
 
 ## Workflow
 

@@ -197,9 +197,12 @@ layout(location=0) in vec2 aP; void main(){ gl_Position = vec4(aP, 0.0, 1.0); }`
     const first = !S.bb;
     S.bb = bounds(model, 0);
     const b = S.bb, r = 0.5 * Math.hypot(b.max[0] - b.min[0], b.max[1] - b.min[1], b.max[2] - b.min[2]);
-    S.radius = r; cam.target = [(b.min[0] + b.max[0]) / 2, (b.min[1] + b.max[1]) / 2, (b.min[2] + b.max[2]) / 2];
-    // refit when the thing changes size by much (debris spreads), but leave the angle alone
-    if (first || S.autoFrame || Math.abs(r - (S.fitR || 0)) > 0.1 * (S.fitR || 1)) { cam.dist = r / Math.sin(cam.fov / 2) * 1.12; S.fitR = r; S.autoFrame = false; }
+    S.radius = r;
+    // refit when the thing changes size by much (debris spreads), but leave the angle alone; and glide
+    // there rather than jump (tick() eases toward S.goal), except the first time
+    const goal = { target: [(b.min[0] + b.max[0]) / 2, (b.min[1] + b.max[1]) / 2, (b.min[2] + b.max[2]) / 2], dist: cam.dist };
+    if (first || S.autoFrame || Math.abs(r - (S.fitR || 0)) > 0.1 * (S.fitR || 1)) { goal.dist = r / Math.sin(cam.fov / 2) * 1.12; S.fitR = r; S.autoFrame = false; }
+    if (first) { cam.target = goal.target; cam.dist = goal.dist; S.goal = null; } else S.goal = goal;
     S.dirty = true; S.shadowDirty = true;
   }
   function setTextures(t) { S.tex = t; mip(t); S.dirty = true; }
@@ -259,6 +262,19 @@ layout(location=0) in vec2 aP; void main(){ gl_Position = vec4(aP, 0.0, 1.0); }`
     gl.disable(gl.CULL_FACE); gl.bindVertexArray(null);
   }
 
+  // ease the camera toward its goal: about a third of a second, whatever the frame rate
+  let lastTick = 0;
+  function tick() {
+    const now = performance.now(), dt = Math.min(0.1, lastTick ? (now - lastTick) / 1000 : 0.016); lastTick = now;
+    const g = S.goal; if (!g) return;
+    const k = 1 - Math.exp(-dt * 9);
+    let done = true;
+    for (let i = 0; i < 3; i++) { cam.target[i] += (g.target[i] - cam.target[i]) * k; if (Math.abs(g.target[i] - cam.target[i]) > 1e-4) done = false; }
+    cam.dist += (g.dist - cam.dist) * k; if (Math.abs(g.dist - cam.dist) > 1e-4 * g.dist) done = false;
+    if (done) { cam.target = g.target.slice(); cam.dist = g.dist; S.goal = null; }
+    S.dirty = true;
+  }
+
   function resize() {
     const dpr = Math.min(window.devicePixelRatio || 1, 2), w = Math.max(2, Math.round(canvas.clientWidth * dpr)), h = Math.max(2, Math.round(canvas.clientHeight * dpr));
     if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; S.dirty = true; }
@@ -270,13 +286,13 @@ layout(location=0) in vec2 aP; void main(){ gl_Position = vec4(aP, 0.0, 1.0); }`
   canvas.addEventListener('pointermove', (ev) => {
     if (!drag) return; const dx = ev.clientX - drag.x, dy = ev.clientY - drag.y; drag.x = ev.clientX; drag.y = ev.clientY;
     if (S.atlas) { const k = 1 / (Math.min(canvas.clientWidth, canvas.clientHeight) * S.atlasZoom[2]); S.atlasZoom[0] -= dx * k; S.atlasZoom[1] += dy * k; S.dirty = true; return; }
-    if (drag.pan) { const s = cam.dist * 0.0012; cam.target[0] -= Math.cos(cam.yaw) * dx * s; cam.target[2] += Math.sin(cam.yaw) * dx * s; cam.target[1] += dy * s; }
+    if (drag.pan) { S.goal = null; const s = cam.dist * 0.0012; cam.target[0] -= Math.cos(cam.yaw) * dx * s; cam.target[2] += Math.sin(cam.yaw) * dx * s; cam.target[1] += dy * s; }
     else { cam.yaw -= dx * 0.008; cam.pitch = Math.max(-0.2, Math.min(1.5, cam.pitch + dy * 0.008)); }
     S.dirty = true;
   });
   canvas.addEventListener('pointerup', () => { drag = null; });
   canvas.addEventListener('contextmenu', (ev) => ev.preventDefault());
-  canvas.addEventListener('wheel', (ev) => { ev.preventDefault(); if (S.atlas) S.atlasZoom[2] = Math.max(1, Math.min(64, S.atlasZoom[2] * Math.exp(-ev.deltaY * 0.0015))); else cam.dist *= Math.exp(ev.deltaY * 0.0012); S.dirty = true; }, { passive: false });
+  canvas.addEventListener('wheel', (ev) => { ev.preventDefault(); if (S.atlas) S.atlasZoom[2] = Math.max(1, Math.min(64, S.atlasZoom[2] * Math.exp(-ev.deltaY * 0.0015))); else { if (S.goal) S.goal.dist = cam.dist * Math.exp(ev.deltaY * 0.0012); cam.dist *= Math.exp(ev.deltaY * 0.0012); } S.dirty = true; }, { passive: false });
 
-  return { S, cam, setModel, setTextures, setCards, render, resize };
+  return { S, cam, setModel, setTextures, setCards, render, resize, tick };
 }

@@ -22,21 +22,6 @@ export function ragged(R, W, T, { kMin = 4, kMax = 7, reach = 1 } = {}) {
   o.max = Math.max(...o.top, ...o.bot);
   return o;
 }
-// An end the fire made: not torn but eaten back, rounded at the corners where
-// it burned from two sides, and thinned toward the face that took the heat
-// (top, the outer face, recedes further than bot). Same shape as ragged().
-export function charredEnd(R, W, T, { K = 5 } = {}) {
-  const amp = W * R.range(0.06, 0.2), top = [], bot = [], ys = [];
-  for (let k = 0; k <= K; k++) {
-    const y = -W / 2 + (W * k) / K, q = (2 * y) / W;
-    const o = amp * q * q * q * q * (0.6 + 0.4 * R()) + R.range(0, W * 0.12);   // rounded where the corners went first, uneven across
-    top.push(o + T * R.range(0.8, 2.2)); bot.push(o); ys.push(y);
-  }
-  const mn = Math.min(...top, ...bot);
-  const out = { top: top.map((x) => x - mn), bot: bot.map((x) => x - mn), ys };
-  out.max = Math.max(...out.top, ...out.bot);
-  return out;
-}
 // the other side of the same break
 export const mirrorBreak = (o) => ({ top: o.top.map((x) => o.max - x), bot: o.bot.map((x) => o.max - x), ys: o.ys, max: o.max });
 

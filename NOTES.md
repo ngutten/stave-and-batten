@@ -144,7 +144,7 @@ Story: **the fire is the last thing that happened.** Char covers patina, grime, 
 - **Geometry (crate):** sample heat along each board and batten in its rest frame; the stretch over the threshold is consumed, the rest kept with a charred ragged end; pieces left with nothing holding them fall as charred debris; consumed battens count as gone for the collapse rule. **Barrel:** staves burnt short on the seat side; hoops drop when the staves under them go.
 - **Styles:** new facts `sChar`, `sSoot`, `sAsh`; each style draws char as its darkest mark (cel flat black with crack lines, ink solid black with white cracks, wash a charcoal glaze).
 - **Order:** labels; heat field and surface, then look at it from several seats and amounts; crate geometry; barrel; styles; maybe history presets ("Scorched", "Burnt out").
-- *Outcome:* all but the barrel's geometry and presets done; see "Fire". Nich's mid-course corrections: labels should crease, not just tear; paint should blur in a batten's lee; char was too uniform and too light, and scorch must follow the grain.
+- *Outcome:* the plan's surface work held; its geometry did not. Burning boards and battens through (as planned) left floating pieces and read as impact damage, so fire now only chars and eats board edges, and breaks stay the damage dial's; see "Fire". No presets. Nich's corrections along the way: char was too uniform and too light, and scorch must follow the grain (his reference photos); labels over battens must be stretched paper, not a decal that follows the step (now geometry, `sheet.js`); paint should blur in a batten's lee; stencil labels printed white on black (a bug).
 
 ## Next
 

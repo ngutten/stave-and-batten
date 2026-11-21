@@ -27,6 +27,7 @@ const BAKE_LOCS = { uv: 0, pos: 1, nrm: 2, tan: 3, log: 4, face: 5, ids: 6, extr
 const MATERIAL_FS = `#version 300 es
 precision highp float; precision highp int;
 ${NOISE}
+const float FOOT_A = 0.019;   // stamp A at a batten's foot; falls to 0 at 3 cm out (stamp type 4)
 ${WOOD}
 uniform sampler2D uStamps, uOcc;
 uniform float uTexel, uSawn, uAge, uSun, uDirt, uDamp, uRust, uWear, uSeed, uModelH;
@@ -43,14 +44,14 @@ uniform vec4 uDkV[NDECAL];   // v axis, 1 / height
 uniform vec4 uDkN[NDECAL];   // normal, depth centre
 uniform vec4 uDkO[NDECAL];   // origin, depth half window
 uniform vec4 uDkC[NDECAL];   // colour, rotation
-uniform vec4 uDkP[NDECAL];   // centre offset (m) in u and v; barrel profile is in uCyl
+uniform vec4 uDkP[NDECAL];   // centre offset (m) in u and v, 1 if over battens; barrel profile is in uCyl
 uniform vec4 uCyl;           // head radius, bilge radius, height
 vec4 decalTex(int i, vec2 uv, float lod){
   if(i == 0) return textureLod(uDecal0, uv, lod); if(i == 1) return textureLod(uDecal1, uv, lod);
   if(i == 2) return textureLod(uDecal2, uv, lod); return textureLod(uDecal3, uv, lod);
 }
 // returns the image sample (rgb, coverage) and a blurred coverage for halos
-bool decalAt(int i, vec3 p, float texel, out vec4 tex, out float soft){
+bool decalAt(int i, vec3 p, float texel, out vec4 tex, out float soft, out vec3 uvl){
   vec4 A = uDkA[i]; if(A.x < 0.0) return false;
   vec3 d = p - uDkO[i].xyz; vec2 q; float depth;
   if(A.x < 0.5){ q = vec2(dot(d, uDkU[i].xyz), dot(d, uDkV[i].xyz)); depth = dot(d, uDkN[i].xyz); }
@@ -68,7 +69,7 @@ bool decalAt(int i, vec3 p, float texel, out vec4 tex, out float soft){
   if(uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) return false;
   // the image is at most a few hundred pixels across; do not sample it finer than the bake can show
   float lod = max(0.0, log2(texel * max(uDkU[i].w, uDkV[i].w) * 256.0));
-  tex = decalTex(i, uv, lod); soft = decalTex(i, uv, lod + 3.2).a;
+  tex = decalTex(i, uv, lod); soft = decalTex(i, uv, lod + 3.2).a; uvl = vec3(uv, lod);
   return true;
 } layout(location=1) out vec4 oSurf; layout(location=2) out vec4 oAux;
 
@@ -153,7 +154,7 @@ void main(){
   // facts for the drawn styles
   float sF = 0.0, sFw = 1.0, sKrho = 9.0, sKr = 1.0, sCrack = 0.0, sEnd = 0.0, sGrey = 0.0, sWear = 0.0, sDamp = 0.0, sDirt = 0.0, sRust = 0.0, sMark = 0.0, sSeam = 0.0, sHole = 0.0;
   vec3 sFlat = vec3(0.5), sMarkCol = vec3(0.0), sKnotCol = vec3(0.1);
-  float gStain = 0.0, gWet = 0.0, gSplash = 0.0, gMoss = 0.0, gRot = 0.0;
+  float gStain = 0.0, gWet = 0.0, gSplash = 0.0, gMoss = 0.0, gRot = 0.0, gLabel = 0.0;
 
   if(mat == 0){
     Wood w = woodAt(vLog, vIds.y, texel, uKnots * (1.0 - vExtra.z));
@@ -207,14 +208,25 @@ void main(){
 
     // markings: sprayed through a stencil, burnt in with an iron, chalked on, or pasted as a label
     for(int i = 0; i < NDECAL; i++){
-      vec4 tx; float soft;
-      if(!decalAt(i, vRest, texel, tx, soft)) continue;
+      vec4 tx; float soft; vec3 uvl;
+      if(!decalAt(i, vRest, texel, tx, soft, uvl)) continue;
       vec4 A = uDkA[i]; vec3 dc = uDkC[i].rgb; int mode = int(A.y + 0.5);
+      float nearB = (st.a > 1e-4 && st.a < 0.02) ? (1.0 - st.a / FOOT_A) * 0.03 : 1.0;   // metres to the nearest batten's edge
       float fine = vnoise(vRest * 700.0), blot = 0.5 + 0.5 * fbm2(vRest * 30.0 + 5.0 * float(i));
       float cov = tx.a * (1.0 - 0.9 * ghostIn) * (1.0 - fresh) * (1.0 - endGrain * 0.5);
       if(mode == 0){
-        // paint: soft at the edge, thin on the high grain, worn off edges and wherever the weather got at it
+        // paint: soft at the edge, thin on the high grain, worn off edges and wherever the weather got at it.
+        // Sprayed across a batten: beside it the boards were in the batten's lee, so the stencil's edge blurs there,
+        // the paint thins and a mist of overspray drifts out; the batten's own sides catch it thinly.
+        float lee = uDkP[i].z * (1.0 - smoothstep(0.0, 0.03, nearB));
+        if(lee > 0.001){
+          float blurA = decalTex(i, uvl.xy, uvl.z + 1.0 + 2.5 * lee).a * (1.0 - 0.9 * ghostIn) * (1.0 - fresh) * (1.0 - endGrain * 0.5);
+          cov = mix(cov, blurA * (0.80 + 0.30 * fine), lee);
+        }
+        float faceP = A.x < 0.5 ? smoothstep(0.15, 0.9, abs(dot(normalize(vNrm), uDkN[i].xyz))) : 1.0;
         float mk = smoothstep(0.30, 0.62, cov + 0.10 * (fine - 0.5)) + 0.22 * soft * (1.0 - tx.a) * fine;
+        mk = mk * (1.0 - 0.35 * lee) + lee * 0.5 * soft * smoothstep(0.80, 0.92, vnoise(vRest * 1100.0 + float(i)));
+        mk *= 0.35 + 0.65 * faceP;
         float gone = A.w * (0.15 + 1.5 * blot * blot + 1.2 * wear + 0.9 * grey + 0.5 * (w.late - 0.3));
         mk *= 1.0 - smoothstep(0.55, 0.95, gone + 0.45 * (fine - 0.5));
         mk *= 1.0 - 0.6 * w.crack;
@@ -235,12 +247,44 @@ void main(){
         col = mix(col, dc, sat(mk * A.z)); rough = mix(rough, 0.95, mk);
         if(mk * A.z > sMark){ sMark = mk * A.z; sMarkCol = dc; }
       } else {
-        // a paper label: the image itself, yellowed, torn and peeling where it has worn
-        float tear = smoothstep(0.25, 0.75, A.w * (0.2 + 1.7 * blot * blot + 0.8 * wear) + 0.3 * (fine - 0.5));
-        float pa = smoothstep(0.4, 0.6, cov) * (1.0 - tear) * A.z;
-        vec3 paper = srgb2lin(tx.rgb) * mix(vec3(1.0), vec3(0.80, 0.70, 0.52), 0.25 + 0.6 * age) * (0.9 + 0.2 * blot);
+        // a paper label: the image itself, and it has had the same years, sun, damp, grime and spills as the wood under it
+        float weather = sat(0.40 * age + 0.35 * sun + 0.30 * dampK + 0.25 * dirtK + 0.30 * uGr.x + 0.25 * uGr.y);
+        float rim = sat((1.0 - soft) * 2.5);                                   // near the label's own edge: it lifts and browns first
+        // paper cannot follow a step: where the surface under it ends (a board gap, a batten's edge) it cracks,
+        // and beside a batten it never reached into the corner
+        float stepK = 1.0 - smoothstep(0.0012, 0.0025 + 0.006 * weather * (0.5 + blot), e + 0.0015 * (fine - 0.5));
+        // pasted over battens, it was pressed down into the corner beside each one: it creased along the batten,
+        // and right in the corner, where it bridged, it split
+        float bridged = uDkP[i].z * (1.0 - smoothstep(0.004, 0.026, nearB + 0.006 * (vnoise(vRest * 30.0 + 2.0) - 0.5)));
+        // ridges roughly along the batten, wandering, some running out at a slant, none evenly spaced
+        float cx = nearB / (0.005 + 0.003 * vnoise(vRest * 14.0)) + 3.5 * fbm2(vRest * 26.0 + 9.0) + 1.5 * gnoise(vRest * 70.0);
+        float crease = pow(1.0 - abs(fract(cx) - 0.5) * 2.0, 4.0) * bridged * smoothstep(0.25, 0.7, vnoise(vRest * 16.0 + 4.0) + 0.3 * bridged);
+        float corner = uDkP[i].z * (1.0 - smoothstep(0.0015, 0.004, nearB + 0.003 * (blot - 0.5) + 0.002 * (fine - 0.5)));
+        float facing = A.x < 0.5 ? smoothstep(0.75, 0.95, abs(dot(normalize(vNrm), uDkN[i].xyz))) : 1.0;   // not down the side of a step
+        // paper comes away in pieces, not specks
+        float tear = smoothstep(0.46, 0.54, A.w * (0.2 + 1.7 * blot * blot + 0.8 * wear) + weather * (0.05 + 0.6 * blot * blot + 0.45 * rim) + 0.12 * (fine - 0.5));
+        tear = max(tear, max(stepK, corner));
+        float pa = smoothstep(0.4, 0.6, cov) * (1.0 - tear) * facing * A.z;
+        // ink fades in the sun; the paper yellows, most at its edges; brown spots come with age and damp
+        vec3 ink = srgb2lin(tx.rgb);
+        ink = mix(ink, mix(vec3(luma(ink)), ink, 0.6) * 0.5 + 0.5 * max(ink, vec3(luma(ink))), sat(0.7 * sun + 0.2 * age));
+        vec3 paper = ink * mix(vec3(1.0), vec3(0.80, 0.68, 0.48), sat(0.15 + 0.75 * weather * (0.6 + 0.5 * blot) + 0.5 * rim * weather)) * (0.92 + 0.16 * blot);
+        float fox = smoothstep(0.80, 0.86, vnoise(vRest * 160.0 + 17.0 * float(i))) * sat(age * 1.4 + dampK) * (0.5 + 0.5 * fine);
+        paper = mix(paper, paper * vec3(0.62, 0.45, 0.28), fox * 0.8);
+        // water it has drunk dries to a tea-coloured patch with a darker tide line
+        float ws = sat((0.8 * uGr.x + 0.7 * uGr.y + 0.6 * dampK) * 1.3);
+        if(ws > 0.02){
+          float wt = 0.5 + 0.5 * fbm2(vRest * 6.5 + 11.0 * float(i)), wl = 1.0 - 0.6 * ws;
+          paper = mix(paper, paper * vec3(0.86, 0.74, 0.56), step(wl, wt) * 0.8);
+          paper *= 1.0 - 0.35 * (1.0 - smoothstep(0.0, 0.012, abs(wt - wl)));
+        }
+        // the torn edge shows pale fibres
+        float fringe = tear * (1.0 - tear) * 4.0 * smoothstep(0.4, 0.6, cov) * facing;
         if(pa > sMark){ sMark = pa; sMarkCol = paper; }
-        col = mix(col, paper, pa); rough = mix(rough, 0.82, pa); h += pa * 0.00012 - pa * 0.00008 * fine; cav = mix(cav, 1.0, pa);
+        col = mix(col, paper, pa); col = mix(col, vec3(0.62, 0.58, 0.50), fringe * 0.35 * A.z);
+        rough = mix(rough, 0.82, pa); h += pa * 0.00012 - pa * 0.00008 * fine; cav = mix(cav, 1.0, pa);
+        h += pa * crease * 0.0010; col = mix(col, col * (1.0 + 0.10 * crease) + 0.015 * crease, pa);     // a crease is a ridge, and the fibres whiten along it
+        gLabel = max(gLabel, pa);
       }
     }
 
@@ -326,6 +370,7 @@ void main(){
       // (a run starts where something went over the top edge)
       vec2 sp1 = topness > 0.5 ? splat(gp, 0.34, uGr.x * 0.75, 0.0, 0.0, 11.0, texel) : runs(gp, 0.30, uGr.x * 0.55, uModelH, 12.0, texel);
       float k = sp1.x * (0.45 + 0.55 * (1.0 - smoothstep(0.55, 0.95, sp1.y))) * (1.0 - 0.3 * lateK) * (1.0 - fresh) * faceK * (mat == 0 ? 1.0 : 0.5);
+      k = sat(k * (1.0 + 0.8 * gLabel));                                  // paper drinks a spill deeper than wood does
       // a stain darkens wood and leans it toward its own colour; it does not paint it
       vec3 tint = (0.42 + 0.58 * uStainCol / max(max(uStainCol.r, uStainCol.g), max(uStainCol.b, 1e-3))) * (0.50 + 0.9 * luma(sqrt(uStainCol)));
       col *= mix(vec3(1.0), min(tint, vec3(1.0)), k); rough -= 0.10 * k; gStain = k;
@@ -354,6 +399,7 @@ void main(){
     // grime: a film everywhere, thick in corners, in the grain, and down the runoff paths
     float hrel = sat(h * 2500.0 + 0.5);
     float dirt = dirtK * sat(0.22 + 0.9 * n1 + 2.4 * (1.0 - ao) + 0.7 * streak - 0.45 * hrel + 0.3 * dirtK);
+    dirt = sat(dirt * (1.0 + 0.4 * gLabel));                                                               // and holds grime
     dirt = sat(dirt + dirtK * 0.6 * (1.0 - smoothstep(0.0, 0.10 * uModelH + 0.02, vPos.y)) * (0.6 + n1));   // splash from the ground
     dirt = sat(dirt * (1.0 - 0.75 * ghostIn) + dirtK * 0.7 * ghostEdge);                                   // the line of dirt round where a batten sat
     col = mix(col, vec3(0.075, 0.060, 0.045) * (0.8 + 0.4 * n3), dirt * 0.82);
@@ -521,6 +567,7 @@ void main(){
 const STAMP_FS = `#version 300 es
 precision highp float; precision highp int;
 ${NOISE}
+const float FOOT_A = 0.019;   // stamp A at a batten's foot; falls to 0 at 3 cm out (stamp type 4)
 in vec2 vP; flat in vec4 vRS; flat in vec4 vRect; flat in float vG; flat in vec2 vHalf;
 out vec4 o;
 void main(){
@@ -549,6 +596,12 @@ void main(){
     vec2 d = vHalf - abs(vP);
     float edge = min(d.x, d.y) + 0.12 * (vnoise(vec3(vP * 1.7, seed * 9.0)) - 0.5);
     o = vec4(0.0, 0.0, 0.0, smoothstep(-0.12, 0.12, edge));
+  } else if(type == 4){
+    // the foot of a sound batten: how near the boards around it are to its edge, kept below 0.02 so
+    // nothing that reads the ghost channel sees it (see NOTES: stamps)
+    vec2 hf = vHalf + 0.6 - vRS.w, d = abs(vP) - hf;
+    float outside = max(max(d.x, d.y), 0.0);
+    o = vec4(0.0, 0.0, 0.0, FOOT_A * (1.0 - min(outside / vRS.w, 1.0)));
   } else if(type == 3){
     // a hole where a nail was drawn: the same stain, no head
     float d = length(vP);
@@ -684,7 +737,7 @@ export function createBaker(gl) {
     const out = () => target(gl, size, size, [{ internal: gl.SRGB8_ALPHA8, filter: gl.NEAREST }, U8, U8]);
     const os = Math.max(256, size >> 1);
     T = {
-      stamps: target(gl, size, size, [U8]),
+      stamps: target(gl, size, size, [F16]),     // half float: the foot of a batten carries a fine distance in A
       occAcc: target(gl, os, os, [F16]), occ: target(gl, os, os, [U8L]), occB: target(gl, os, os, [U8L]),
       mat: target(gl, size, size, [{ internal: gl.SRGB8_ALPHA8, filter: gl.NEAREST }, F16, U8]),
       a: out(), b: out(), occKey: '',
@@ -710,7 +763,7 @@ export function createBaker(gl) {
       const c = mk.color || [0.02, 0.02, 0.02];
       C.set([Math.pow(c[0], 2.2), Math.pow(c[1], 2.2), Math.pow(c[2], 2.2), (mk.rot || 0) * Math.PI / 180], i * 4);
       // x, y in -1..1 place the centre within the target, leaving the image inside it
-      Pp.set([mk.x * Math.max(0, tg.w - w) / 2, mk.y * Math.max(0, tg.h - h) / 2, 0, 0], i * 4);
+      Pp.set([mk.x * Math.max(0, tg.w - w) / 2, mk.y * Math.max(0, tg.h - h) / 2, mk.over ? 1 : 0, 0], i * 4);
       if (tg.cyl) u.uCyl = [...tg.cyl, 0];
     }
     return u;
@@ -758,6 +811,9 @@ export function createBaker(gl) {
         if (st.type === 'band') {
           const half = st.half * 100, wd = (st.width * 100) / 2 + 0.2;
           rs.set([cm, st.seed, 1, half], i * 4); ext.set([wd, wd, half + 16, half + 3], i * 4);
+        } else if (st.type === 'foot') {
+          const mg = 3, hl = st.half[0] * 100 + mg, hw = st.half[1] * 100 + mg;   // centimetres, with a 3 cm reach round it
+          rs.set([cm, st.seed, 4, mg], i * 4); ext.set([hl, hl, hw, hw], i * 4);
         } else if (st.type === 'ghost') {
           const hl = st.half[0] * 100 + 0.6, hw = st.half[1] * 100 + 0.6;       // a margin for the soft edge
           rs.set([cm, st.seed, 2, 0], i * 4); ext.set([hl, hl, hw, hw], i * 4);

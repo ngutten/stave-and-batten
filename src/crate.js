@@ -25,6 +25,7 @@ export const CRATE_PARAMS = [
   { key: 'battenW', label: 'Batten width', min: 0.03, max: 0.2, step: 0.005, def: 0.085, unit: 'm', group: 'Joinery' },
   { key: 'battenT', label: 'Batten thickness', min: 0.008, max: 0.05, step: 0.001, def: 0.022, unit: 'm', group: 'Joinery' },
   { key: 'brace', label: 'Bracing', options: ['none', 'diagonal', 'chevron', 'mid rail'], def: 'diagonal', group: 'Joinery' },
+  { key: 'plain', label: 'Plain face', options: ['none', 'front', 'back', 'left', 'right'], def: 'none', group: 'Joinery', hint: 'Leave the brace off one wall, so a label has clear boards to go on' },
   { key: 'sideBoards', label: 'Side boards', options: ['vertical', 'horizontal'], def: 'vertical', group: 'Joinery' },
   { key: 'slop', label: 'Carpenter\'s slop', min: 0, max: 1, step: 0.01, def: 0.35, group: 'Joinery' },
   { key: 'bevel', label: 'Edge chamfer', min: 0, max: 0.006, step: 0.0005, def: 0.0025, unit: 'm', group: 'Joinery' },
@@ -88,9 +89,10 @@ export function buildCrate(params, seed) {
       { name: 'stileR', u0: bu - bw, u1: bu, v0: -bv + bw, v1: bv - bw, hor: false, mask: sides },
     ];
     const iu0 = -bu + bw, iu1 = bu - bw, iv0 = -bv + bw, iv1 = bv - bw;
-    if (P.brace === 'mid rail' && pn.wall) {
+    const braced = pn.name !== P.plain;                     // a plain face keeps its frame but no brace, for a label
+    if (braced && P.brace === 'mid rail' && pn.wall) {
       battens.push(alongV ? { name: 'mid', u0: iu0, u1: iu1, v0: -bw / 2, v1: bw / 2, hor: true, mask: sides } : { name: 'mid', u0: -bw / 2, u1: bw / 2, v0: iv0, v1: iv1, hor: false, mask: sides });
-    } else if ((P.brace === 'diagonal' || P.brace === 'chevron') && !isBottom && iu1 - iu0 > bw * 1.5 && iv1 - iv0 > bw * 1.5) {
+    } else if (braced && (P.brace === 'diagonal' || P.brace === 'chevron') && !isBottom && iu1 - iu0 > bw * 1.5 && iv1 - iv0 > bw * 1.5) {
       // A brace cut to sit between the stiles: its lower edge meets one inner
       // corner and its upper edge the opposite one. Solve the angle by iteration.
       const dir = (P.brace === 'chevron' ? pn.flip : 0) ? -1 : 1, du = iu1 - iu0;
@@ -247,6 +249,11 @@ export function buildCrate(params, seed) {
       };
 
       if (b.state <= 1) {
+        // its foot on the boards: lets a label pasted over it tear beside it (bake: stamp type 4)
+        for (const brd of boards) for (const isl of brd.faces) {
+          const wi = inIsl(isl, w3);
+          m.stamps.push({ type: 'foot', isl: isl.id, f: isl.fOf(at(b.cu, b.cv, 0)), g: [-wi[0], -wi[1]], half: [b.len / 2, b.wid / 2], seed: 0 });   // no draw from Rb: it would move every later draw
+        }
         // sound, or working loose: one end has lifted
         const lift = b.state === 1 ? Rb.range(0.004, 0.014) : 0, tw = b.state === 1 ? Rb.sym(0.012) : 0;
         const ax = norm(add(madd(d3, w3, tw), mul(pn.n, (b.keep * -lift) / b.len))), az = norm(cross(ax, cross(pn.n, ax))), ay = cross(az, ax);

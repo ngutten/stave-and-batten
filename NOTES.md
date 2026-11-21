@@ -26,7 +26,7 @@ Conventions and invariants that the code relies on and that are easy to break. R
 
 ## Bake passes and targets
 
-1. Stamps -> RGBA8, MAX blending. R rust stain, G nail head, B sink depth x 2000 (1.0 means an empty nail hole), A ghost (sheltered from weather: where a lost batten or hoop sat). Stamp types: 0 nail, 1 hoop band, 2 batten ghost, 3 nail hole.
+1. Stamps -> RGBA16F (was RGBA8), MAX blending. R rust stain, G nail head, B sink depth x 2000 (1.0 means an empty nail hole), A ghost (sheltered from weather: where a lost batten or hoop sat). Stamp types: 0 nail, 1 hoop band, 2 batten ghost, 3 nail hole, 4 batten foot. **The foot** of every sound batten writes A below 0.02 (`FOOT_A` = 0.019 under the batten, falling to 0 at 3 cm out), so `nearB` in the material is the distance to the nearest batten edge. Everything that reads A as a ghost uses `step(0.02, a)` or `smoothstep(0.45, …)` and so never sees it. That is why the target is half float: 8 bits gave 6 mm steps, too coarse for creases.
 2. Occlusion at half resolution: 96 depth renders (Fibonacci sphere), accumulated in RGBA16F. R = ambient occlusion, G = sky exposure (1 for an open upward face). Cached per geometry key. Baked in the final pose.
 3. Material -> albedo (SRGB8_ALPHA8, alpha carries the island density and doubles as coverage), surface (RGBA16F: height in millimetres, roughness, metallic, occlusion x cavity), aux.
 4. Resolve: height -> tangent-space normal by central differences, one-sided at island borders, scaled by density.
@@ -57,6 +57,14 @@ Timings are only real after a one-pixel `readPixels`. `gl.finish()` does not wai
 - Projected in rest space. A target is a plane or the barrel's unrolled side; `skin` and `proud` are depth windows (boards only, or boards and whatever stands on them).
 - Up to four at once, passed as uniform arrays `uDk*`. The image's alpha is coverage. Paper labels use a second texture that keeps the picture's own alpha.
 - The stencil library is generated (`tools/gen_stencils.py`, needs the local image server) and packed (`tools/pack_stencils.py`) into `src/assets/stencils.js`. Raw images are not committed.
+
+## Markings over battens (2026-11-20)
+
+- A mark's `over` reaches the shader as `uDkP[i].z`. Only marks sprayed or pasted over battens react to them.
+- **Paint** in a batten's lee (within 3 cm of its edge, `nearB`): the stencil is sampled blurrier (`decalAt` now returns uv and lod), the paint thins, and an overspray mist drifts out. Faces turned away from the spray (a batten's sides) take it thinly.
+- **A paper label** cannot follow a step: it cracks within a few mm of any island edge (board gaps, a batten's edges), splits right in the corner beside a batten, and creases in wandering ridges out to ~2.5 cm. It never lies down the side of a step (`facing`).
+- **A label ages with the crate**: `weather` (age, sun, damp, grime, spills, wet) yellows it (most at its own rim), foxes it, fades its ink in the sun, tears it in pieces rather than specks, and leaves a tide-lined water stain. Paper drinks a spill deeper than wood and holds more grime (`gLabel`). "Worn away" still adds tearing.
+- **Plain face** (Joinery) leaves the brace or mid rail off one wall, so a label can go on clear boards.
 
 ## Styles
 
@@ -100,6 +108,26 @@ Timings are only real after a one-pixel `readPixels`. `gl.finish()` does not wai
 - `npm run build` writes the release page to `docs/index.html` as well as `dist/`. GitHub Pages serves `docs/` from the main branch. `dist/`, `shots/` and `assets_raw/` are not committed.
 - `tools/gen_*.py` need an OpenAI-style image server; set `IMAGE_HOST`.
 - Public at https://github.com/ngutten/stave-and-batten (CC0), served at https://ngutten.github.io/stave-and-batten/. To publish a change: `npm run build`, commit on `main`, push `main`. Only `main` is public; any other local branch stays local.
+
+## Plan, 2026-11-20 (labels, then fire)
+
+Written before any code, as the session asked. Struck through or amended as it turns out.
+
+### Labels (from a friend's look at it) — done, see "Markings over battens"; Nich asked for creases rather than plain tearing, and a spray lee for paint
+Seen: a label pasted across a brace runs on over the batten and the boards beside it as if printed there, and on a Warehouse crate the top is stained while the label looks new.
+- **Plain face** (Joinery): leave the brace or mid rail off one wall so a label has clear boards.
+- **A label tears where the surface steps**: within a few millimetres of an island edge (`e`) the paper is cracked or gone, so across a batten it breaks at both edges, and it cracks along board gaps.
+- **A label ages with the crate**: yellows unevenly and most at its edges, foxes with age and damp, its ink fades with sun, it drinks spills and water (darker and with a tide line than the wood beside it), and the weather adds to its tearing. "Worn away" still adds on top.
+
+### Fire
+Story: **the fire is the last thing that happened.** Char covers patina, grime, paint, labels; nothing has weathered since.
+- **One heat field**, `heat(p)` in rest space (so a piece that fell keeps the char it had where it stood), written once in `damage.js` and mirrored in GLSL, the way `hurt` is. Params: Fire (amount) and Seat (beside / beneath / inside), the seat point drawn from its own stream `'fire'` so blows never move it. Shape: a plume over the seat whose radius grows with height (the V a fire leaves on a wall), plus a pool of heat near the seat. The shader adds what JS cannot cheaply know: faces turned to the seat burn more, sheltered ones less (occlusion), arrises first.
+- **Wood by heat H:** ~.15–.35 scorched (toasted, earlywood first; labels brown then go; paint blisters dark) · ~.35–.65 charred: black, alligatored (cracks across the grain every 1–2 cm, along it more closely; block tops with a faint silver sheen, cracks matte) · above ~.65 deep char: larger blocks, deeper cracks, pale ash lying on upward faces, edges eaten · above 1 burnt through (geometry).
+- **Soot:** a wider, taller plume outside the char, heaviest on downward faces and under overhangs, on iron too.
+- **Iron:** temper colours (straw, brown, purple, blue, grey), then black scale.
+- **Geometry (crate):** sample heat along each board and batten in its rest frame; the stretch over the threshold is consumed, the rest kept with a charred ragged end; pieces left with nothing holding them fall as charred debris; consumed battens count as gone for the collapse rule. **Barrel:** staves burnt short on the seat side; hoops drop when the staves under them go.
+- **Styles:** new facts `sChar`, `sSoot`, `sAsh`; each style draws char as its darkest mark (cel flat black with crack lines, ink solid black with white cracks, wash a charcoal glaze).
+- **Order:** labels; heat field and surface, then look at it from several seats and amounts; crate geometry; barrel; styles; maybe history presets ("Scorched", "Burnt out").
 
 ## Next
 
